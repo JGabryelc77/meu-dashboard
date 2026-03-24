@@ -1,85 +1,110 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import date
 
-# 1. DESIGN E CONFIGURAÇÃO
-st.set_page_config(page_title="Afiliado Dash Pro", layout="wide")
+# 1. CONFIGURAÇÃO DA PÁGINA E DESIGN CUSTOMIZADO (CSS)
+st.set_page_config(page_title="AfiliadoDash PRO", layout="wide")
 
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 28px; }
-    .main { background-color: #0e1117; }
+    /* Fundo Escuro do Site */
+    .main { background-color: #0b0e14; }
+    
+    /* Estilização dos Cards (Engenharia Reversa do Print) */
+    div[data-testid="metric-container"] {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        padding: 15px;
+        border-radius: 10px;
+        color: white;
+    }
+    
+    /* Cores das métricas */
+    div[data-testid="stMetricValue"] { color: #ffffff; font-weight: bold; }
+    div[data-testid="stMetricLabel"] { color: #8b949e; }
+    
+    /* Esconder o Menu Padrão e o Made with Streamlit */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL (MENU) ---
 with st.sidebar:
-    st.title("⚙️ Configurações")
-    arquivo_vendas = st.file_uploader("Subir CSV de Vendas (Shopee)", type=['csv'])
+    st.markdown("<h2 style='color: #ff4b4b;'>🟠 AfiliadoDash</h2>", unsafe_allow_html=True)
     st.divider()
-    investimento_usd = st.number_input("💸 Gasto Meta Ads (US$)", min_value=0.0, value=0.0)
-    cotacao = st.number_input("💵 Cotação Dólar (R$)", min_value=1.0, value=5.10)
+    st.write("📊 **Análise do Dia**")
+    st.write("📈 **Análise de Cliques**")
+    st.write("🎯 **Meta Ads**")
+    st.divider()
+    st.header("Upload de Dados")
+    arquivo = st.file_uploader("Subir CSV Shopee", type=['csv'])
+    st.divider()
+    invest_usd = st.number_input("Investimento (US$)", min_value=0.0, value=0.0, step=1.0)
+    cotacao = st.number_input("Cotação Dólar (R$)", value=5.15)
 
-# --- PROCESSAMENTO REAL DO CSV ---
+# --- PROCESSAMENTO DO SEU CSV ---
 comissao_total = 0.0
-qtd_pedidos = 0
-df_vendas = pd.DataFrame()
+pedidos_total = 0
+df = pd.DataFrame()
 
-if arquivo_vendas:
-    try:
-        # Lendo o CSV da Shopee
-        df_vendas = pd.read_csv(arquivo_vendas)
-        
-        # Filtrando apenas pedidos que não foram cancelados
-        df_validos = df_vendas[df_vendas['Status do Pedido'] != 'Cancelado']
-        
-        # Somando a comissão líquida real
-        comissao_total = df_validos['Comissão líquida do afiliado(R$)'].sum()
-        qtd_pedidos = len(df_validos)
-        
-    except Exception as e:
-        st.error(f"Erro ao ler o arquivo: {e}")
+if arquivo:
+    df = pd.read_csv(arquivo)
+    # Filtrando apenas o que não foi cancelado
+    df_validos = df[df['Status do Pedido'] != 'Cancelado']
+    comissao_total = df_validos['Comissão líquida do afiliado(R$)'].sum()
+    pedidos_total = len(df_validos)
 
-# --- CÁLCULOS FINANCEIROS ---
-gasto_brl = investimento_usd * cotacao
-lucro_real = comissao_total - gasto_brl
-roas = comissao_total / gasto_brl if gasto_brl > 0 else 0.0
+# --- CÁLCULOS ---
+invest_brl = invest_usd * cotacao
+lucro = comissao_total - invest_brl
+roas = comissao_total / invest_brl if invest_brl > 0 else 0.0
 
-# --- INTERFACE PRINCIPAL ---
-st.title("🚀 Dashboard de Operação Real")
+# --- ESTRUTURA VISUAL IGUAL AO PRINT ---
+st.markdown("<h2 style='color: white;'>Análise do Dia</h2>", unsafe_allow_html=True)
+st.caption("Detalhe das vendas e comissões do período.")
 
-col1, col2, col3, col4 = st.columns(4)
+# Linha 1 de Cards
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Vendas Totais", f"R$ {comissao_total * 10:.2f}") # Valor Bruto estimado
+c2.metric("Pedidos", pedidos_total)
+c3.metric("Comissão Líquida", f"R$ {comissao_total:.2f}")
+c4.metric("Ticket Médio", f"R$ {(comissao_total*10/pedidos_total) if pedidos_total > 0 else 0:.2f}")
 
-with col1:
-    st.metric("Investimento", f"US$ {investimento_usd:.2f}", f"R$ {gasto_brl:.2f}")
-with col2:
-    st.metric("Comissão Shopee", f"R$ {comissao_total:.2f}", f"{qtd_pedidos} pedidos")
-with col3:
-    st.metric("Lucro Líquido", f"R$ {lucro_real:.2f}", delta=f"{lucro_real:.2f}")
-with col4:
-    st.metric("ROAS", f"{roas:.2f}x")
+# Linha 2 de Cards
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("Investimento", f"US$ {invest_usd:.2f}", f"R$ {invest_brl:.2f}")
+c6.metric("Lucro Total", f"R$ {lucro:.2f}", delta=f"R$ {lucro:.2f}")
+c7.metric("ROAS", f"{roas:.2f}x")
+c8.metric("CPMV", "R$ 0,00")
 
 st.divider()
 
-# --- ANÁLISE POR VÍDEO (SUB_ID1) ---
-if not df_vendas.empty:
-    c1, c2 = st.columns([1, 1])
+# TABELA DE SUB_IDS (A unificada que você queria)
+st.markdown("<h3 style='color: white;'>Análise unificada</h3>", unsafe_allow_html=True)
+
+if not df.empty:
+    # Agrupando por Sub_id1 (Vídeo/Criativo)
+    analise_sub = df[df['Status do Pedido'] != 'Cancelado'].groupby('Sub_id1').agg({
+        'ID do pedido': 'count',
+        'Comissão líquida do afiliado(R$)': 'sum'
+    }).reset_index()
     
-    with c1:
-        st.subheader("📊 Vendas por Vídeo (Sub_id1)")
-        # Agrupando vendas por Sub_id1
-        vendas_por_sub = df_vendas[df_vendas['Status do Pedido'] != 'Cancelado'].groupby('Sub_id1')['Comissão líquida do afiliado(R$)'].sum().reset_index()
-        vendas_por_sub = vendas_por_sub.sort_values(by='Comissão líquida do afiliado(R$)', ascending=False)
-        
-        fig = px.bar(vendas_por_sub, x='Sub_id1', y='Comissão líquida do afiliado(R$)', 
-                     title="Ranking de Lucro por Vídeo", template="plotly_dark",
-                     color_discrete_sequence=['#00FF00'])
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c2:
-        st.subheader("📝 Últimos Pedidos")
-        st.dataframe(df_vendas[['Horário do pedido', 'Status do Pedido', 'Sub_id1', 'Comissão líquida do afiliado(R$)']].head(10), use_container_width=True)
-
+    analise_sub.columns = ['SubID', 'Pedidos', 'Comissão Líquida']
+    
+    # Exibindo a tabela formatada
+    st.dataframe(analise_sub.style.format({'Comissão Líquida': 'R$ {:.2f}'}), use_container_width=True)
 else:
-    st.info("Aguardando upload do CSV da Shopee para analisar os vídeos...")
+    st.warning("Aguardando upload do CSV para gerar a análise unificada.")
+
+# GRÁFICO DE EVOLUÇÃO (IGUAL AO PRINT)
+if not df.empty:
+    st.divider()
+    st.subheader("Evolução de Vendas")
+    df['Data'] = pd.to_datetime(df['Horário do pedido']).dt.date
+    vendas_data = df.groupby('Data')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+    
+    fig = px.line(vendas_data, x='Data', y='Comissão líquida do afiliado(R$)', 
+                 template="plotly_dark", color_discrete_sequence=['#ff4b4b'])
+    st.plotly_chart(fig, use_container_width=True)
