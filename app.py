@@ -18,7 +18,7 @@ st.markdown("""
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("🟠 AfiliadoDash")
+    st.markdown("<h1 style='color: #ff4b4b;'>🟠 AfiliadoDash</h1>", unsafe_allow_html=True)
     arquivo = st.file_uploader("Subir CSV Shopee", type=['csv'])
     st.divider()
     st.info("Painel de Visão Geral")
@@ -26,8 +26,12 @@ with st.sidebar:
 # --- LÓGICA DE DADOS ---
 if arquivo:
     df = pd.read_csv(arquivo)
-    # Filtro de válidos (remove cancelados e não pagos para métricas principais)
-    df_validos = df[df['Status do Pedido'].isin(['Pendente', 'Concluído'])]
+    
+    # Criando a coluna de data de forma segura
+    df['Data_Convertida'] = pd.to_datetime(df['Horário do pedido']).dt.strftime('%d/%m/%Y')
+    
+    # Filtro de válidos
+    df_validos = df[df['Status do Pedido'].isin(['Pendente', 'Concluído'])].copy()
     
     vendas_brutas = df_validos['Preço(R$)'].sum()
     pedidos_total = len(df_validos)
@@ -45,7 +49,7 @@ if arquivo:
 
     st.divider()
 
-    # --- LINHA 2: TOP SUBIDS (BARRAS HORIZONTAIS) ---
+    # --- LINHA 2: TOP SUBIDS ---
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -58,7 +62,6 @@ if arquivo:
 
     with c2:
         st.markdown("### TOP SUBID 2 (COMISSÃO)")
-        # No seu CSV o Sub_id2 é o canal (instaeface)
         top2 = df_validos.groupby('Sub_id2')['Comissão líquida do afiliado(R$)'].sum().reset_index()
         fig2 = px.bar(top2, x='Comissão líquida do afiliado(R$)', y='Sub_id2', orientation='h',
                       template="plotly_dark", color_discrete_sequence=['#ff6d00'])
@@ -67,7 +70,7 @@ if arquivo:
 
     with c3:
         st.markdown("### TOP SUBID 3 (COMISSÃO)")
-        st.write("Sem dados de SubID 3") # O seu CSV não tem essa coluna preenchida
+        st.write("Sem dados de SubID 3")
 
     st.divider()
 
@@ -76,7 +79,6 @@ if arquivo:
 
     with c4:
         st.markdown("### POR CANAL")
-        # Gráfico de Rosca (Donut Chart) igual ao print
         canal_data = df_validos.groupby('Canal')['Comissão líquida do afiliado(R$)'].sum().reset_index()
         fig_rosca = px.pie(canal_data, values='Comissão líquida do afiliado(R$)', names='Canal', 
                            hole=0.6, template="plotly_dark", 
@@ -90,12 +92,14 @@ if arquivo:
                             template="plotly_dark", color_discrete_sequence=['#ffd600'])
         st.plotly_chart(fig_status, use_container_width=True)
 
-    # --- LINHA 4: EVOLUÇÃO ---
+    # --- LINHA 4: EVOLUÇÃO (AQUI ESTAVA O ERRO) ---
     st.divider()
     st.markdown("<h3 style='text-align: center;'>EVOLUÇÃO DA COMISSÃO</h3>", unsafe_allow_html=True)
-    df['Data'] = pd.to_datetime(df['Horário do pedido']).dt.strftime('%d/%m/%Y')
-    evolucao = df_validos.groupby('Data')['Comissão líquida do afiliado(R$)'].sum().reset_index()
-    fig_line = px.line(evolucao, x='Data', y='Comissão líquida do afiliado(R$)', 
+    
+    # CORREÇÃO: Usando a coluna 'Data_Convertida' que criamos lá no topo
+    evolucao = df_validos.groupby('Data_Convertida')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+    
+    fig_line = px.line(evolucao, x='Data_Convertida', y='Comissão líquida do afiliado(R$)', 
                        markers=True, template="plotly_dark", color_discrete_sequence=['#00c853'])
     st.plotly_chart(fig_line, use_container_width=True)
 
