@@ -2,117 +2,102 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 1. SETUP DE DESIGN PROFISSIONAL
-st.set_page_config(page_title="AfiliadoDash PRO", layout="wide")
+# 1. ESTILO E CONFIGURAÇÃO
+st.set_page_config(page_title="AfiliadoDash | Dashboard", layout="wide")
 
 st.markdown("""
 <style>
     .main { background-color: #0b0e14; }
-    /* Estilização dos Cards com Ícones e Cores */
-    .stMetric {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
+    div[data-testid="metric-container"] {
+        background-color: #161b22; border: 1px solid #30363d;
+        padding: 20px; border-radius: 10px;
     }
-    h2, h3 { color: white !important; font-family: 'Inter', sans-serif; }
-    p { color: #8b949e !important; }
-    
-    /* Tabela Estilo Dark */
-    .styled-table { border-collapse: collapse; width: 100%; color: white; }
+    h3 { color: white; font-size: 18px; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR (MENU LATERAL) ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.markdown("<h1 style='color: #ff4b4b;'>🟠 AfiliadoDash</h1>", unsafe_allow_html=True)
-    st.divider()
-    st.button("🏠 Análise do Dia", use_container_width=True)
-    st.button("📈 Análise de Cliques", use_container_width=True)
-    st.button("🎯 Meta Ads", use_container_width=True)
-    st.divider()
-    st.header("Upload de Dados")
+    st.title("🟠 AfiliadoDash")
     arquivo = st.file_uploader("Subir CSV Shopee", type=['csv'])
     st.divider()
-    invest_usd = st.number_input("Investimento (US$)", min_value=0.0, value=0.0)
-    cotacao = st.number_input("Cotação Dólar (R$)", value=5.15)
+    st.info("Painel de Visão Geral")
 
 # --- LÓGICA DE DADOS ---
-comissao_total = 0.0
-pedidos_total = 0
-vendas_brutas = 0.0
-df = pd.DataFrame()
-
 if arquivo:
     df = pd.read_csv(arquivo)
-    df_validos = df[df['Status do Pedido'] != 'Cancelado']
-    comissao_total = df_validos['Comissão líquida do afiliado(R$)'].sum()
-    pedidos_total = len(df_validos)
+    # Filtro de válidos (remove cancelados e não pagos para métricas principais)
+    df_validos = df[df['Status do Pedido'].isin(['Pendente', 'Concluído'])]
+    
     vendas_brutas = df_validos['Preço(R$)'].sum()
+    pedidos_total = len(df_validos)
+    comissao_total = df_validos['Comissão líquida do afiliado(R$)'].sum()
+    ticket_medio = vendas_brutas / pedidos_total if pedidos_total > 0 else 0
 
-invest_brl = invest_usd * cotacao
-lucro = comissao_total - invest_brl
-roas = comissao_total / invest_brl if invest_brl > 0 else 0.0
-ticket = vendas_brutas / pedidos_total if pedidos_total > 0 else 0.0
+    # --- LINHA 1: METRICAS PRINCIPAIS ---
+    st.markdown("### Dashboard")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Vendas Totais", f"R$ {vendas_brutas:.2f}")
+    m2.metric("Pedidos", pedidos_total)
+    m3.metric("Comissão Líquida", f"R$ {comissao_total:.2f}")
+    m4.metric("Ticket Médio", f"R$ {ticket_medio:.2f}")
+    m5.metric("Comissão a Validar", "R$ 0,00")
 
-# --- TELA PRINCIPAL (ESTRUTURA IGUAL AO PRINT) ---
-st.title("Análise do Dia")
-st.write("Detalhe das vendas e comissões do período.")
+    st.divider()
 
-# GRID DE CARDS 1
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Vendas Totais", f"R$ {vendas_brutas:.2f}", help="Soma dos preços dos produtos")
-c2.metric("Pedidos", pedidos_total, "Total de vendas")
-c3.metric("Comissão Líquida", f"R$ {comissao_total:.2f}", "Seu lucro bruto")
-c4.metric("Ticket Médio", f"R$ {ticket:.2f}")
+    # --- LINHA 2: TOP SUBIDS (BARRAS HORIZONTAIS) ---
+    c1, c2, c3 = st.columns(3)
 
-# GRID DE CARDS 2
-c5, c6, c7, c8 = st.columns(4)
-c5.metric("Investimento", f"US$ {invest_usd:.2f}", f"R$ {invest_brl:.2f}")
-c6.metric("Lucro Total", f"R$ {lucro:.2f}", delta=f"R$ {lucro:.2f}")
-c7.metric("ROAS", f"{roas:.2f}x")
-c8.metric("CPMV", "R$ 0,00")
+    with c1:
+        st.markdown("### TOP SUBID 1 (COMISSÃO)")
+        top1 = df_validos.groupby('Sub_id1')['Comissão líquida do afiliado(R$)'].sum().reset_index().sort_values('Comissão líquida do afiliado(R$)', ascending=True).tail(5)
+        fig1 = px.bar(top1, x='Comissão líquida do afiliado(R$)', y='Sub_id1', orientation='h', 
+                      template="plotly_dark", color_discrete_sequence=['#00c853'])
+        fig1.update_layout(xaxis_visible=False, height=300, margin=dict(l=0, r=0, t=0, b=0))
+        st.plotly_chart(fig1, use_container_width=True)
 
-st.markdown("---")
+    with c2:
+        st.markdown("### TOP SUBID 2 (COMISSÃO)")
+        # No seu CSV o Sub_id2 é o canal (instaeface)
+        top2 = df_validos.groupby('Sub_id2')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+        fig2 = px.bar(top2, x='Comissão líquida do afiliado(R$)', y='Sub_id2', orientation='h',
+                      template="plotly_dark", color_discrete_sequence=['#ff6d00'])
+        fig2.update_layout(xaxis_visible=False, height=300)
+        st.plotly_chart(fig2, use_container_width=True)
 
-# ANÁLISE UNIFICADA (TABELA DETALHADA)
-st.subheader("Análise unificada")
-if not df.empty:
-    # Criando a tabela igual ao print
-    tab_unificada = df_validos.groupby('Sub_id1').agg({
-        'ID do pedido': 'count',
-        'Comissão líquida do afiliado(R$)': 'sum',
-        'Preço(R$)': 'sum'
-    }).reset_index()
-    
-    tab_unificada.columns = ['SubID', 'Pedidos', 'Comissão Líquida', 'Valor Total']
-    
-    # Adicionando Lucro (como você não tem gasto por SubID no CSV, simulamos Lucro = Comissão)
-    tab_unificada['Lucro'] = tab_unificada['Comissão Líquida']
-    
-    st.dataframe(tab_unificada.style.format({
-        'Comissão Líquida': 'R$ {:.2f}', 
-        'Valor Total': 'R$ {:.2f}', 
-        'Lucro': 'R$ {:.2f}'
-    }), use_container_width=True)
+    with c3:
+        st.markdown("### TOP SUBID 3 (COMISSÃO)")
+        st.write("Sem dados de SubID 3") # O seu CSV não tem essa coluna preenchida
+
+    st.divider()
+
+    # --- LINHA 3: CANAL E STATUS ---
+    c4, c5 = st.columns(2)
+
+    with c4:
+        st.markdown("### POR CANAL")
+        # Gráfico de Rosca (Donut Chart) igual ao print
+        canal_data = df_validos.groupby('Canal')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+        fig_rosca = px.pie(canal_data, values='Comissão líquida do afiliado(R$)', names='Canal', 
+                           hole=0.6, template="plotly_dark", 
+                           color_discrete_sequence=['#2979ff', '#ff6d00', '#00c853'])
+        st.plotly_chart(fig_rosca, use_container_width=True)
+
+    with c5:
+        st.markdown("### COMISSÃO POR STATUS")
+        status_data = df.groupby('Status do Pedido')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+        fig_status = px.bar(status_data, x='Comissão líquida do afiliado(R$)', y='Status do Pedido', orientation='h',
+                            template="plotly_dark", color_discrete_sequence=['#ffd600'])
+        st.plotly_chart(fig_status, use_container_width=True)
+
+    # --- LINHA 4: EVOLUÇÃO ---
+    st.divider()
+    st.markdown("<h3 style='text-align: center;'>EVOLUÇÃO DA COMISSÃO</h3>", unsafe_allow_html=True)
+    df['Data'] = pd.to_datetime(df['Horário do pedido']).dt.strftime('%d/%m/%Y')
+    evolucao = df_validos.groupby('Data')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+    fig_line = px.line(evolucao, x='Data', y='Comissão líquida do afiliado(R$)', 
+                       markers=True, template="plotly_dark", color_discrete_sequence=['#00c853'])
+    st.plotly_chart(fig_line, use_container_width=True)
+
 else:
-    st.info("Suba o arquivo para ver a tabela unificada.")
-
-st.markdown("---")
-
-# EVOLUÇÃO DE VENDAS (GRÁFICO MELHORADO)
-st.subheader("Evolução de Vendas")
-if not df.empty:
-    df['Horário do pedido'] = pd.to_datetime(df['Horário do pedido'])
-    # Agrupando por hora ou dia para o gráfico não ficar uma linha reta
-    vendas_tempo = df_validos.copy()
-    vendas_tempo['Hora'] = pd.to_datetime(vendas_tempo['Horário do pedido']).dt.strftime('%H:00')
-    graf_data = vendas_tempo.groupby('Hora')['Comissão líquida do afiliado(R$)'].sum().reset_index()
-    
-    fig = px.area(graf_data, x='Hora', y='Comissão líquida do afiliado(R$)', 
-                 template="plotly_dark", line_shape="spline",
-                 color_discrete_sequence=['#ff4b4b'])
-    
-    fig.update_layout(yaxis_title="Comissão (R$)", xaxis_title="Hora do Pedido")
-    st.plotly_chart(fig, use_container_width=True)
+    st.warning("Por favor, suba o arquivo CSV na barra lateral para carregar o Dashboard.")
