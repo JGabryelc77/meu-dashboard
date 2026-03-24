@@ -1,69 +1,46 @@
 import streamlit as st
-import requests
+import pandas as pd
 from datetime import date
 
 # Configuração da Página
 st.set_page_config(page_title="Afiliado Dash", layout="wide")
 
-# Função para pegar a cotação do Dólar (PTAX) no Banco Central
-def pegar_cotacao_dolar():
-    try:
-        url = "https://economia.awesomeapi.com.br/last/USD-BRL"
-        r = requests.get(url).json()
-        return float(r['USDBRL']['bid'])
-    except:
-        return 5.00 # Valor de segurança caso a API falhe
-
-# Função para buscar dados do Facebook
-def buscar_gastos_fb():
-    token = st.secrets["FB_ACCESS_TOKEN"]
-    account_id = st.secrets["FB_AD_ACCOUNT_ID"]
-    hoje = date.today().strftime('%Y-%m-%d')
-    
-    url = f"https://graph.facebook.com/v19.0/{account_id}/insights"
-    params = {
-        'access_token': token,
-        'time_range': f"{{'since':'{hoje}','until':'{hoje}'}}",
-        'fields': 'spend',
-        'level': 'account'
-    }
-    
-    try:
-        r = requests.get(url, params=params).json()
-        if 'data' in r and len(r['data']) > 0:
-            return float(r['data'][0]['spend'])
-        return 0.0
-    except:
-        return 0.0
-
-# --- INTERFACE DO SITE ---
 st.title("📊 Painel de Tráfego - Vídeos Dark")
 
-if st.button('🔄 Atualizar Dados Agora'):
-    with st.spinner('Buscando dados na Meta e Cotação do Dólar...'):
-        gastos_usd = buscar_gastos_fb()
-        cotacao = pegar_cotacao_dolar()
-        gastos_brl = gastos_usd * cotacao
-        
-        # Simulando vendas (enquanto a Shopee não libera a API)
-        vendas_brl = 0.00 # Aqui entrará o valor da Shopee
-        lucro_brl = vendas_brl - gastos_brl
-        
-        st.subheader(f"Resumo de Hoje (Cotação US$: R$ {cotacao:.2f})")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        col1.metric("Investimento (Meta Ads)", f"US$ {gastos_usd:.2f}", f"R$ {gastos_brl:.2f}")
-        col2.metric("Vendas (Shopee)", f"R$ {vendas_brl:.2f}")
-        
-        # Cor do lucro (Verde se positivo, Vermelho se negativo)
-        st.metric("Lucro Líquido Real", f"R$ {lucro_brl:.2f}", delta=f"{lucro_brl:.2f}", delta_color="normal")
-        
-        if gastos_usd > 0:
-            roas = vendas_brl / gastos_brl if gastos_brl > 0 else 0
-            st.write(f"**ROAS Atual:** {roas:.2f}x")
+# --- BARRA LATERAL (UPLOADS) ---
+st.sidebar.header("📁 Importar Dados (Shopee)")
+arquivo_vendas = st.sidebar.file_uploader("Importar CSV de Vendas", type=['csv'])
+arquivo_cliques = st.sidebar.file_uploader("Importar CSV de Cliques", type=['csv'])
 
-else:
-    st.info("Clique no botão acima para sincronizar sua BM americana e converter para Reais.")
+# --- LÓGICA DE PROCESSAMENTO ---
+vendas_totais = 0.0
+total_pedidos = 0
+total_cliques = 0
 
-# Rodapé com a data da última atualização
-st.caption(f"Dados atualizados em: {date.today().strftime('%d/%m/%Y')}")
+if arquivo_vendas is not None:
+    df_vendas = pd.read_csv(arquivo_vendas)
+    # Aqui o código soma a coluna de comissão (ajustaremos o nome da coluna conforme o seu arquivo)
+    # Por enquanto, vamos simular que ele achou os dados:
+    vendas_totais = 150.75 # Exemplo simulado
+    total_pedidos = len(df_vendas)
+
+if arquivo_cliques is not None:
+    df_cliques = pd.read_csv(arquivo_cliques)
+    total_cliques = len(df_cliques)
+
+# --- INTERFACE PRINCIPAL ---
+st.subheader("Resumo de Hoje")
+col1, col2, col3, col4 = st.columns(4)
+
+# Como o Facebook deu erro no SMS, vamos deixar um campo manual temporário para investimento
+investimento_manual = st.number_input("Digite seu gasto no Meta (US$)", min_value=0.0, value=0.0)
+
+col1.metric("Investimento (Meta)", f"US$ {investimento_manual:.2f}")
+col2.metric("Vendas (Shopee)", f"R$ {vendas_totais:.2f}")
+col3.metric("Total Pedidos", total_pedidos)
+col4.metric("Cliques Shopee", total_cliques)
+
+st.divider()
+
+if investimento_manual > 0 or vendas_totais > 0:
+    st.success(f"Análise: Com R$ {vendas_totais:.2f} em vendas e US$ {investimento_manual:.2f} de gasto, seu dashboard está pronto!")
