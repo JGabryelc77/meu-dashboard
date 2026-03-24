@@ -3,88 +3,83 @@ import pandas as pd
 import plotly.express as px
 from datetime import date
 
-# 1. CONFIGURAÇÃO DE DESIGN (MODO DARK E LAYOUT)
-st.set_page_config(page_title="Afiliado Dash Pro", layout="wide", initial_sidebar_state="expanded")
+# 1. DESIGN E CONFIGURAÇÃO
+st.set_page_config(page_title="Afiliado Dash Pro", layout="wide")
 
-# CSS para deixar os cards bonitos igual ao seu print
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] { font-size: 28px; color: #ffffff; }
-    [data-testid="stMetricLabel"] { font-size: 16px; color: #a1a1a1; }
+    [data-testid="stMetricValue"] { font-size: 28px; }
     .main { background-color: #0e1117; }
-    div.stButton > button:first-child { background-color: #ff4b4b; color: white; border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3141/3141133.png", width=80)
-    st.title("Menu")
+    st.title("⚙️ Configurações")
+    arquivo_vendas = st.file_uploader("Subir CSV de Vendas (Shopee)", type=['csv'])
     st.divider()
-    st.header("📁 Importar Relatórios")
-    arquivo_vendas = st.file_uploader("CSV de Vendas Shopee", type=['csv'])
-    arquivo_cliques = st.file_uploader("CSV de Cliques Shopee", type=['csv'])
-    st.divider()
-    st.info("BM Americana Detectada: US$")
+    investimento_usd = st.number_input("💸 Gasto Meta Ads (US$)", min_value=0.0, value=0.0)
+    cotacao = st.number_input("💵 Cotação Dólar (R$)", min_value=1.0, value=5.10)
 
-# --- PROCESSAMENTO DOS DADOS ---
-vendas_val = 0.0
-pedidos_val = 0
-cliques_val = 0
+# --- PROCESSAMENTO REAL DO CSV ---
+comissao_total = 0.0
+qtd_pedidos = 0
+df_vendas = pd.DataFrame()
 
 if arquivo_vendas:
-    df_v = pd.read_csv(arquivo_vendas)
-    pedidos_val = len(df_v)
-    vendas_val = 150.75 # Simulando valor por enquanto
+    try:
+        # Lendo o CSV da Shopee
+        df_vendas = pd.read_csv(arquivo_vendas)
+        
+        # Filtrando apenas pedidos que não foram cancelados
+        df_validos = df_vendas[df_vendas['Status do Pedido'] != 'Cancelado']
+        
+        # Somando a comissão líquida real
+        comissao_total = df_validos['Comissão líquida do afiliado(R$)'].sum()
+        qtd_pedidos = len(df_validos)
+        
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo: {e}")
 
-if arquivo_cliques:
-    df_c = pd.read_csv(arquivo_cliques)
-    cliques_val = len(df_c)
+# --- CÁLCULOS FINANCEIROS ---
+gasto_brl = investimento_usd * cotacao
+lucro_real = comissao_total - gasto_brl
+roas = comissao_total / gasto_brl if gasto_brl > 0 else 0.0
 
-# --- CABEÇALHO ---
-st.title("🚀 Dashboard de Operação")
-st.write(f"Análise de dados para vídeos dark | {date.today().strftime('%d/%m/%Y')}")
+# --- INTERFACE PRINCIPAL ---
+st.title("🚀 Dashboard de Operação Real")
 
-# --- LINHA 1: CARDS DE MÉTRICAS ---
 col1, col2, col3, col4 = st.columns(4)
 
-investimento_manual = st.number_input("💸 Gasto Meta Ads (US$)", min_value=0.0, value=0.0, help="Insira o valor gasto hoje na sua BM")
-
-# Pegar cotação fixa de R$ 5.00 para facilitar o cálculo visual
-cotacao = 5.0
-gasto_brl = investimento_manual * cotacao
-lucro = vendas_val - gasto_brl
-
 with col1:
-    st.metric("Investimento Total", f"US$ {investimento_manual:.2f}", f"R$ {gasto_brl:.2f} (estimado)")
+    st.metric("Investimento", f"US$ {investimento_usd:.2f}", f"R$ {gasto_brl:.2f}")
 with col2:
-    st.metric("Vendas Shopee", f"R$ {vendas_val:.2f}", f"{pedidos_val} pedidos")
+    st.metric("Comissão Shopee", f"R$ {comissao_total:.2f}", f"{qtd_pedidos} pedidos")
 with col3:
-    st.metric("Lucro Líquido", f"R$ {lucro:.2f}", delta=f"{lucro:.2f}")
+    st.metric("Lucro Líquido", f"R$ {lucro_real:.2f}", delta=f"{lucro_real:.2f}")
 with col4:
-    roas = vendas_val / gasto_brl if gasto_brl > 0 else 0
     st.metric("ROAS", f"{roas:.2f}x")
 
 st.divider()
 
-# --- LINHA 2: GRÁFICO E TABELA (Engenharia Reversa do seu print) ---
-c1, c2 = st.columns([2, 1])
+# --- ANÁLISE POR VÍDEO (SUB_ID1) ---
+if not df_vendas.empty:
+    c1, c2 = st.columns([1, 1])
+    
+    with c1:
+        st.subheader("📊 Vendas por Vídeo (Sub_id1)")
+        # Agrupando vendas por Sub_id1
+        vendas_por_sub = df_vendas[df_vendas['Status do Pedido'] != 'Cancelado'].groupby('Sub_id1')['Comissão líquida do afiliado(R$)'].sum().reset_index()
+        vendas_por_sub = vendas_por_sub.sort_values(by='Comissão líquida do afiliado(R$)', ascending=False)
+        
+        fig = px.bar(vendas_por_sub, x='Sub_id1', y='Comissão líquida do afiliado(R$)', 
+                     title="Ranking de Lucro por Vídeo", template="plotly_dark",
+                     color_discrete_sequence=['#00FF00'])
+        st.plotly_chart(fig, use_container_width=True)
 
-with c1:
-    st.subheader("📈 Evolução de Cliques")
-    # Criando um gráfico de exemplo para preencher o espaço
-    dados_grafico = pd.DataFrame({'Dia': ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'], 'Cliques': [100, 250, 400, 800, cliques_val]})
-    fig = px.line(dados_grafico, x='Dia', y='Cliques', template="plotly_dark", color_discrete_sequence=['#ff4b4b'])
-    st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        st.subheader("📝 Últimos Pedidos")
+        st.dataframe(df_vendas[['Horário do pedido', 'Status do Pedido', 'Sub_id1', 'Comissão líquida do afiliado(R$)']].head(10), use_container_width=True)
 
-with c2:
-    st.subheader("🛍️ Status da Shopee")
-    # Tabela simples de status
-    status_dados = pd.DataFrame({
-        'Status': ['Concluído', 'Pendente', 'Cancelado'],
-        'Qtd': [pedidos_val, 0, 0],
-        'Valor': [f"R$ {vendas_val}", "R$ 0,00", "R$ 0,00"]
-    })
-    st.table(status_dados)
-
-st.success("Configuração local concluída. Quando a API liberar, os gráficos serão automáticos!")
+else:
+    st.info("Aguardando upload do CSV da Shopee para analisar os vídeos...")
