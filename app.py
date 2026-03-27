@@ -11,51 +11,27 @@ from dateutil.relativedelta import relativedelta
 # --- 1. SETUP DA PÁGINA ---
 st.set_page_config(page_title="Nexus Analytics | Shopee", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS COMPLETAMENTE NOVO (ESTILO VERCEL / MINIMALISTA HIGH-TECH) ---
+# --- CSS MINIMALISTA HIGH-TECH ---
 st.markdown("""
 <style>
-    /* Reset e Fundos */
     .stApp, .main { background-color: #000000 !important; }
     h1, h2, h3, h4 { color: #ededed !important; font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: -0.05em; }
-    
-    /* Esconder elementos nativos */
     header, #MainMenu { visibility: hidden; }
-    
-    /* Sidebar */
     [data-testid="stSidebar"] { background-color: #0a0a0a !important; border-right: 1px solid #333333; }
     [data-testid="stSidebar"] * { color: #a1a1aa !important; }
     hr { border-color: #333333 !important; }
-    
-    /* Input Fields Native Streamlit */
     .stSelectbox > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
     .stDateInput > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
-    
-    /* Cards de Métricas (Novo Layout) */
     .nexus-card {
-        background-color: #111111;
-        border: 1px solid #333333;
-        border-radius: 8px;
-        padding: 20px;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-        height: 100%;
-        display: flex; flex-direction: column; justify-content: center;
+        background-color: #111111; border: 1px solid #333333; border-radius: 8px; padding: 20px;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease; height: 100%; display: flex; flex-direction: column; justify-content: center;
     }
     .nexus-card:hover { border-color: #0070f3; box-shadow: 0 0 15px rgba(0, 112, 243, 0.1); }
     .card-label { color: #888888; font-size: 12px; text-transform: uppercase; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; }
     .card-value { color: #ededed; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; }
     .card-diff { color: #0070f3; font-size: 13px; font-weight: 500; }
-    
-    /* Layout de Gráficos e Tabelas */
-    .nexus-container {
-        background-color: #111111;
-        border: 1px solid #333333;
-        border-radius: 8px;
-        padding: 20px;
-        margin-top: 24px;
-    }
+    .nexus-container { background-color: #111111; border: 1px solid #333333; border-radius: 8px; padding: 20px; margin-top: 24px; }
     .section-title { font-size: 14px; color: #ededed; font-weight: 600; text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid #333333; padding-bottom: 8px; }
-    
-    /* Lista de Sub IDs */
     .subid-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #222222; }
     .subid-row:last-child { border-bottom: none; }
     .subid-name { color: #a1a1aa; font-size: 14px; }
@@ -68,14 +44,15 @@ hoje_pc = date.today()
 # --- 2. FUNÇÃO API SHOPEE ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
     if not url_api or url_api == "":
-        return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
+        return {"error": "Aviso", "detalhe": "URL da API não configurada"}
     try:
         app_id = st.secrets.get("SHOPEE_APP_ID")
         secret = st.secrets.get("SHOPEE_SECRET")
         if not app_id or not secret:
-            return {"error": "Aviso do Sistema", "detalhe": "Credenciais não configuradas nos Secrets!"}
+            return {"error": "Aviso", "detalhe": "Credenciais não configuradas nos Secrets!"}
             
         timestamp = int(time.time())
+        # Ajuste de timezone forçado (pegando o range do dia inteiro)
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
@@ -115,7 +92,7 @@ def ler_csv_shopee(file):
 # --- 4. CONFIGURAÇÕES (SIDEBAR) ---
 with st.sidebar:
     st.markdown("<h3 style='color: #ededed;'>⚙️ Configurações</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 13px; color: #888;'>Painel de controle de dados</p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 13px; color: #888;'>Painel de controle</p>", unsafe_allow_html=True)
     st.divider()
     
     modo = st.radio("Fonte de Dados", ["API Automática", "CSV Local"])
@@ -127,8 +104,10 @@ with st.sidebar:
     arquivo_c = st.file_uploader("🖱️ CSV Cliques", type=['csv'])
         
     api_endpoint = st.secrets.get("SHOPEE_GRAPHQL_ENDPOINT", "https://open-api.affiliate.shopee.com.br/graphql")
-    with st.expander("API Endpoint", expanded=False):
-        st.text_input("URL", value=api_endpoint, disabled=True)
+    
+    st.divider()
+    # MODO DETETIVE:
+    modo_diagnostico = st.checkbox("🛠️ Ativar Modo Diagnóstico", help="Mostra os dados puros que a Shopee enviou.")
 
 # --- 5. CABEÇALHO PRINCIPAL E FILTROS ---
 col_title, col_filter1, col_filter2 = st.columns([2, 1, 1])
@@ -137,10 +116,7 @@ with col_title:
     st.markdown("<h1>NEXUS <span style='color: #0070f3;'>ANALYTICS</span></h1>", unsafe_allow_html=True)
 
 with col_filter1:
-    opcao_data = st.selectbox(
-        "Período Rápido",
-        ["Últimos 30 dias", "Ontem", "Anteontem", "Personalizado"]
-    )
+    opcao_data = st.selectbox("Período Rápido", ["Últimos 30 dias", "Ontem", "Anteontem", "Personalizado"])
 
 with col_filter2:
     if opcao_data == "Ontem":
@@ -154,16 +130,15 @@ with col_filter2:
         st.date_input("Data exata", value=[start_d, end_d], disabled=True)
     else: 
         data_sel = st.date_input("Escolha o intervalo", value=[hoje_pc - timedelta(days=3), hoje_pc], max_value=hoje_pc)
-        if len(data_sel) == 2:
-            start_d, end_d = data_sel[0], data_sel[1]
-        else:
-             start_d, end_d = (hoje_pc, hoje_pc)
+        if len(data_sel) == 2: start_d, end_d = data_sel[0], data_sel[1]
+        else: start_d, end_d = (hoje_pc, hoje_pc)
 
-st.write("") # Espaçamento
+st.write("") 
 
-# --- 6. PROCESSAMENTO DE DADOS (FILTRO CORRIGIDO: LISTA NEGRA) ---
+# --- 6. PROCESSAMENTO DE DADOS ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
+flat_nodes = [] # Lista crua para diagnóstico
 
 if modo == "API Automática":
     with st.spinner("Sincronizando banco de dados..."):
@@ -171,7 +146,6 @@ if modo == "API Automática":
         if dados and 'data' in dados and 'conversionReport' in dados['data']:
             nodes = dados['data']['conversionReport']['nodes']
             if nodes:
-                flat_nodes = []
                 for n in nodes:
                     comissao = n.get('netCommission') or n.get('estimatedTotalCommission') or 0
                     flat_nodes.append({
@@ -179,34 +153,44 @@ if modo == "API Automática":
                         'conversionStatus': n.get('conversionStatus'),
                         'commission': float(comissao),
                         'subId1': "Oculto pela API",
-                        'order_price': 0.0 # API oculta essa info do endpoint
+                        'order_price': 0.0 
                     })
-                df_v_filtrado = pd.DataFrame(flat_nodes)
                 
-                # NOVO FILTRO API: Remove tudo que tenha "cancel", "reject" ou "invalid" no nome.
-                # Ele converte tudo para minúsculo antes de testar para não ter erro.
-                if 'conversionStatus' in df_v_filtrado.columns:
-                    status_limpo = df_v_filtrado['conversionStatus'].astype(str).str.lower()
+                df_cru = pd.DataFrame(flat_nodes)
+                
+                # Exibe a tabela CRUA se o diagnóstico estiver ativo
+                if modo_diagnostico:
+                    st.error(f"🚨 RAIO-X DA API ATIVADO: A Shopee enviou {len(df_cru)} itens neste período.")
+                    st.dataframe(df_cru, use_container_width=True)
+                
+                # Filtro de Rejeitados
+                if 'conversionStatus' in df_cru.columns:
+                    status_limpo = df_cru['conversionStatus'].astype(str).str.lower()
                     filtro_rejeitados = status_limpo.str.contains('cancel|reject|invalid|invalido', na=False)
-                    df_v_filtrado = df_v_filtrado[~filtro_rejeitados]
+                    df_v_filtrado = df_cru[~filtro_rejeitados]
                 
                 vendas_b = df_v_filtrado['order_price'].sum()
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
-            st.error("Erro na comunicação com o servidor.")
-            st.json(dados) 
+            if modo_diagnostico:
+                st.error("🚨 A API retornou isso aqui e não achou a tag 'conversionReport':")
+                st.json(dados)
+            else:
+                st.warning("Sem dados retornados para o período.")
 else: 
     if arquivo_v:
         df_v = ler_csv_shopee(arquivo_v)
-        # O CSV costuma ter nomes de colunas diferentes. Vamos achar a coluna de Horário:
         colunas_tempo = [c for c in df_v.columns if 'horário' in c.lower() or 'tempo' in c.lower() or 'data' in c.lower()]
         if colunas_tempo:
             col_tempo_exata = colunas_tempo[0]
             df_v['Data_Simples'] = pd.to_datetime(df_v[col_tempo_exata]).dt.date
             df_v_filtrado = df_v[(df_v['Data_Simples'] >= start_d) & (df_v['Data_Simples'] <= end_d)]
             
-            # NOVO FILTRO CSV: Mesma regra, procura as palavras negativas e destrói.
+            if modo_diagnostico:
+                st.error(f"🚨 RAIO-X DO CSV: {len(df_v_filtrado)} linhas antes do filtro.")
+                st.dataframe(df_v_filtrado)
+            
             colunas_status = [c for c in df_v_filtrado.columns if 'status' in c.lower()]
             if colunas_status:
                 col_status_exata = colunas_status[0]
@@ -214,7 +198,6 @@ else:
                 filtro_rejeitados_csv = status_limpo_csv.str.contains('cancel|reject|invalid|invalido', na=False)
                 df_v_filtrado = df_v_filtrado[~filtro_rejeitados_csv]
             
-            # Garantir que a coluna de preço seja lida como número
             col_preco = [c for c in df_v_filtrado.columns if 'preço' in c.lower() or 'price' in c.lower()]
             col_comissao = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
             
@@ -243,7 +226,7 @@ with m1:
     <div class="nexus-card">
         <div class="card-label">Vendas Totais</div>
         <div class="card-value">R$ {vendas_b:.2f}</div>
-        <div class="card-diff" style="color: #888;">{'(API não envia BRUTO)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
+        <div class="card-diff" style="color: #888;">{'(API Oculta Bruto)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -270,7 +253,7 @@ with m4:
     <div class="nexus-card">
         <div class="card-label">Taxa de Conversão</div>
         <div class="card-value">{conv:.2f}%</div>
-        <div class="card-diff" style="color: #a1a1aa;">{cliques_t} cliques na conta</div>
+        <div class="card-diff" style="color: #a1a1aa;">{cliques_t} cliques</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -285,7 +268,7 @@ if not df_v_filtrado.empty:
         
         col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
         col_comissao_grafico = 'commission' if 'commission' in df_v_filtrado.columns else df_v_filtrado.columns[-1] 
-        # Busca a coluna certa de comissão no CSV para o gráfico
+        
         if modo != "API Automática":
             col_csv_match = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
             if col_csv_match: col_comissao_grafico = col_csv_match[0]
@@ -295,7 +278,6 @@ if not df_v_filtrado.empty:
         else:
             df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
             
-        # Força os valores de comissão para numérico para evitar erros no gráfico
         df_v_filtrado[col_comissao_grafico] = pd.to_numeric(df_v_filtrado[col_comissao_grafico], errors='coerce').fillna(0)
             
         evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao_grafico].sum().reset_index()
@@ -332,10 +314,3 @@ if not df_v_filtrado.empty:
             </div>
         """, unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
-
-else:
-    # Se ainda estiver vazio mesmo sem a restrição, a gente avisa que não tem dados em vez de um spinner infinito
-    if modo == "API Automática":
-        st.warning(f"Sem pedidos válidos ou registrados na API para o período de {start_d.strftime('%d/%m')} a {end_d.strftime('%d/%m')}.")
-    else:
-        st.info("Aguardando carregamento de dados do CSV...")
