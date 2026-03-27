@@ -30,7 +30,7 @@ hoje_pc = date.today()
 # --- 2. FUNÇÃO API SHOPEE (DINÂMICA E BLINDADA) ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
     if not url_api or url_api == "":
-        return {"error": "Aviso do Sistema", "detalhe": "Você esqueceu de colar a URL da API na barra lateral!"}
+        return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
         
     try:
         app_id = st.secrets["SHOPEE_APP_ID"]
@@ -95,10 +95,9 @@ with st.sidebar:
     data_sel = st.date_input("📅 Filtro de Período", value=[hoje_pc - timedelta(days=7), hoje_pc], max_value=hoje_pc)
     
     st.divider()
-    with st.expander("⚙️ Configuração da API (Cole a URL aqui)", expanded=True):
-        st.caption("Olhe no painel da Shopee qual é a URL do Endpoint de vendas.")
-        # Deixei a URL em branco para você colar a certa que está no seu painel!
-        api_url_input = st.text_input("URL do Endpoint", value="")
+    with st.expander("⚙️ Configuração da API", expanded=True):
+        st.caption("Verifique a URL correta no seu painel da Shopee.")
+        api_url_input = st.text_input("URL do Endpoint", value="https://open-api.affiliate.shopee.com.br/graphql")
         api_method_input = st.selectbox("Método HTTP", ["POST", "GET"])
 
 # --- 5. PROCESSAMENTO DE DADOS ---
