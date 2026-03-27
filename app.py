@@ -161,7 +161,7 @@ with col_filter2:
 
 st.write("") # Espaçamento
 
-# --- 6. PROCESSAMENTO DE DADOS ---
+# --- 6. PROCESSAMENTO DE DADOS (FILTRO RESTRITO) ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
 
@@ -179,11 +179,15 @@ if modo == "API Automática":
                         'conversionStatus': n.get('conversionStatus'),
                         'commission': float(comissao),
                         'subId1': "Oculto pela API",
-                        'order_price': 0.0 
+                        'order_price': 0.0 # API oculta essa info do endpoint
                     })
                 df_v_filtrado = pd.DataFrame(flat_nodes)
+                
+                # FILTRO ESTRITO API: Somente status positivos
                 if 'conversionStatus' in df_v_filtrado.columns:
-                    df_v_filtrado = df_v_filtrado[~df_v_filtrado['conversionStatus'].isin(['Cancelled', 'Rejected', 'Invalid'])]
+                    status_validos = ['Pending', 'Completed', 'Valid', 'Settled']
+                    df_v_filtrado = df_v_filtrado[df_v_filtrado['conversionStatus'].isin(status_validos)]
+                
                 vendas_b = df_v_filtrado['order_price'].sum()
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
@@ -196,10 +200,20 @@ else:
         if 'Horário do pedido' in df_v.columns:
             df_v['Data_Simples'] = pd.to_datetime(df_v['Horário do pedido']).dt.date
             df_v_filtrado = df_v[(df_v['Data_Simples'] >= start_d) & (df_v['Data_Simples'] <= end_d)]
-            validos = df_v_filtrado[df_v_filtrado['Status do Pedido'] != 'Cancelado']
-            vendas_b = validos['Preço(R$)'].sum()
-            pedidos_t = len(validos)
-            comissao_t = validos['Comissão líquida do afiliado(R$)'].sum()
+            
+            # FILTRO ESTRITO CSV: Remove qualquer variação de Cancelado ou Inválido.
+            if 'Status do Pedido' in df_v_filtrado.columns:
+                filtro_invalido = df_v_filtrado['Status do Pedido'].str.contains('Cancelado|Cancelada|Inválido|Invalido|Rejeitado', case=False, na=False)
+                df_v_filtrado = df_v_filtrado[~filtro_invalido]
+            
+            # Garantir que a coluna de preço seja lida como número
+            col_preco = 'Preço(R$)' if 'Preço(R$)' in df_v_filtrado.columns else None
+            col_comissao = 'Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else None
+            
+            if col_preco and col_comissao:
+                vendas_b = pd.to_numeric(df_v_filtrado[col_preco], errors='coerce').sum()
+                pedidos_t = len(df_v_filtrado)
+                comissao_t = pd.to_numeric(df_v_filtrado[col_comissao], errors='coerce').sum()
 
 if arquivo_c:
     df_c = ler_csv_shopee(arquivo_c)
@@ -208,7 +222,7 @@ if arquivo_c:
         df_c['Data_Simples'] = pd.to_datetime(df_c[colunas_data_c[0]]).dt.date
         df_c_filtrado = df_c[(df_c['Data_Simples'] >= start_d) & (df_c['Data_Simples'] <= end_d)]
         col_cliques = [c for c in df_c.columns if 'Clique' in c or 'Clicks' in c or 'Qtd' in c]
-        cliques_t = df_c_filtrado[col_cliques[0]].sum() if col_cliques else len(df_c_filtrado)
+        cliques_t = pd.to_numeric(df_c_filtrado[col_cliques[0]], errors='coerce').sum() if col_cliques else len(df_c_filtrado)
 
 ticket = vendas_b / pedidos_t if pedidos_t > 0 else 0
 conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
@@ -221,14 +235,14 @@ with m1:
     <div class="nexus-card">
         <div class="card-label">Vendas Totais</div>
         <div class="card-value">R$ {vendas_b:.2f}</div>
-        <div class="card-diff">+0.0% vs anterior</div>
+        <div class="card-diff" style="color: #888;">{'(Via API não retorna)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m2:
     st.markdown(f"""
     <div class="nexus-card">
-        <div class="card-label">Volume de Pedidos</div>
+        <div class="card-label">Pedidos Aprovados</div>
         <div class="card-value">{pedidos_t}</div>
         <div class="card-diff">+0.0% vs anterior</div>
     </div>
@@ -269,10 +283,12 @@ if not df_v_filtrado.empty:
         else:
             df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
             
+        # Força os valores de comissão para numérico para evitar erros no gráfico
+        df_v_filtrado[col_comissao] = pd.to_numeric(df_v_filtrado[col_comissao], errors='coerce').fillna(0)
+            
         evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
         evolucao.columns = ['Data', 'Comissão']
         
-        # Gráfico clean estilo área
         fig = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#0070f3'])
         fig.update_traces(line=dict(width=2), fillcolor='rgba(0, 112, 243, 0.1)')
         fig.update_layout(
@@ -289,7 +305,6 @@ if not df_v_filtrado.empty:
         st.markdown("<div class='nexus-container' style='height: 100%;'>", unsafe_allow_html=True)
         st.markdown("<div class='section-title'>Top Performance</div>", unsafe_allow_html=True)
         
-        # Simulação de SubIDs ou Dados Reais do CSV
         st.markdown(f"""
             <div class="subid-row">
                 <span class="subid-name">Total Consolidado</span>
