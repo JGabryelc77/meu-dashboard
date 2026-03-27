@@ -1,6 +1,6 @@
 """
 Shopee Affiliates Dashboard - API v2 GraphQL
-Usa conversionReport (descoberto via deep schema discovery)
+Endpoint: conversionReport (acessivel)
 """
 import streamlit as st
 import requests
@@ -10,8 +10,6 @@ import time
 from datetime import datetime, timedelta, timezone, date
 import pandas as pd
 
-# ================================================================
-# CONFIG
 # ================================================================
 st.set_page_config(
     page_title="Shopee Affiliates",
@@ -120,61 +118,34 @@ def _sign_and_call(app_id, secret, query):
     return resp.json()
 
 # ================================================================
-# INTROSPECTION
+# INTROSPECTION - SAFE VERSION
 # ================================================================
 def _resolve_base(t):
-    if not t:
+    """Desembrulha NON_NULL/LIST, retorna (name, kind, is_list)"""
+    if not t or not isinstance(t, dict):
         return None, None, False
     is_list = False
     c = t
-    while c and c.get("kind") in ("NON_NULL", "LIST"):
+    depth = 0
+    while c and isinstance(c, dict) and c.get("kind") in ("NON_NULL", "LIST") and depth < 10:
         if c.get("kind") == "LIST":
             is_list = True
-        c = c.get("ofType", {})
-    if not c:
+        c = c.get("ofType")
+        if not isinstance(c, dict):
+            c = None
+        depth += 1
+    if not c or not isinstance(c, dict):
         return None, None, is_list
     return c.get("name"), c.get("kind"), is_list
 
-def get_field_detail(app_id, secret, field_name):
-    """Pega args + return type de um campo do Query type."""
-    q = (
-        '{__type(name:"Query"){fields{name'
-        ' args{name type{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}'
-        ' type{name kind ofType{name kind ofType{name kind ofType{name kind}}}}'
-        '}}}'
-    )
-    try:
-        r = _sign_and_call(app_id, secret, q)
-    except Exception as e:
-        return None, str(e)
-    if "errors" in r:
-        return None, r["errors"][0].get("message", "")
-
-    for f in r.get("data", {}).get("__type", {}).get("fields", []):
-        if f.get("name") == field_name:
-            args = []
-            for a in f.get("args", []):
-                t = a.get("type", {})
-                required = t.get("kind") == "NON_NULL"
-                bname, bkind, _ = _resolve_base(t)
-                args.append({"name": a["name"], "type": bname, "required": required})
-
-            ret_name, ret_kind, ret_list = _resolve_base(f.get("type"))
-            return {
-                "args": args,
-                "return_type": ret_name,
-                "return_kind": ret_kind,
-                "return_is_list": ret_list,
-            }, None
-    return None, field_name + " nao encontrado"
-
-def get_type_fields_deep(app_id, secret, type_name, visited=None, depth=3):
-    """Introspecciona tipo recursivamente."""
-    if visited is None:
-        visited = set()
-    if type_name in visited or depth <= 0 or not type_name:
-        return {"name": type_name, "fields": []}
-    visited.add(type_name)
+def introspect_type_fields(app_id, secret, type_name):
+    """
+    Introspecciona um tipo e retorna lista de campos.
+    Retorna: (list_of_fields, error)
+    Cada campo: {name, type_name, type_kind, is_list, is_scalar}
+    """
+    if not type_name:
+        return [], "type_name vazio"
 
     q = (
         '{__type(name:"' + type_name + '"){name kind'
@@ -183,392 +154,103 @@ def get_type_fields_deep(app_id, secret, type_name, visited=None, depth=3):
     )
     try:
         r = _sign_and_call(app_id, secret, q)
-    except Exception:
-        return {"name": type_name, "fields": []}
+    except Exception as e:
+        return [], str(e)
     if "errors" in r:
-        return {"name": type_name, "fields": []}
+        return [], r["errors"][0].get("message", "")
 
     td = r.get("data", {}).get("__type")
-    if not td:
-        return {"name": type_name, "fields": []}
+    if not td or not isinstance(td, dict):
+        return [], type_name + " nao encontrado"
 
-    result = {"name": type_name, "type_kind": td.get("kind"), "fields": []}
-
+    fields = []
     for f in td.get("fields", []):
+        if not isinstance(f, dict):
+            continue
         bname, bkind, is_list = _resolve_base(f.get("type"))
-        fd = {
-            "name": f["name"],
-            "type": bname,
-            "kind": bkind,
+        fields.append({
+            "name": f.get("name", "?"),
+            "type_name": bname,
+            "type_kind": bkind,
             "is_list": is_list,
-            "is_scalar": bkind in ("SCALAR", "ENUM"),
-        }
-        if not fd["is_scalar"] and bname and bname not in visited:
-            fd["sub"] = get_type_fields_deep(app_id, secret, bname, visited, depth - 1)
+            "is_scalar": bkind in ("SCALAR", "ENUM") if bkind else False,
+        })
+
+    return fields, None
+
+def introspect_deep(app_id, secret, type_name, depth=3, visited=None):
+    """
+    Introspecciona recursivamente. SAFE contra loops e None.
+    Retorna dict com campos e sub-campos.
+    """
+    if visited is None:
+        visited = set()
+
+    if not type_name or type_name in visited or depth <= 0:
+        return {"name": type_name or "?", "fields": []}
+
+    visited.add(type_name)
+
+    fields, err = introspect_type_fields(app_id, secret, type_name)
+    if err:
+        return {"name": type_name, "fields": [], "error": err}
+
+    result = {"name": type_name, "fields": []}
+
+    for f in fields:
+        fd = dict(f)  # copia
+        # Se nao eh escalar e temos profundidade, recursear
+        if not fd["is_scalar"] and fd["type_name"] and fd["type_name"] not in visited and depth > 1:
+            fd["sub"] = introspect_deep(app_id, secret, fd["type_name"], depth - 1, visited.copy())
         result["fields"].append(fd)
 
     return result
 
 # ================================================================
-# BUILD QUERY STRING FROM TREE
+# BUILD FIELDS STRING FROM TREE
 # ================================================================
 def fields_from_tree(tree):
-    """Constroi string de campos GraphQL a partir da arvore."""
+    """Constroi string de campos GraphQL."""
+    if not tree or not isinstance(tree, dict):
+        return ""
     parts = []
     for f in tree.get("fields", []):
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name", "")
+        if not name:
+            continue
         if f.get("is_scalar"):
-            parts.append(f["name"])
-        elif "sub" in f and f["sub"].get("fields"):
+            parts.append(name)
+        elif "sub" in f and isinstance(f["sub"], dict) and f["sub"].get("fields"):
             sub_str = fields_from_tree(f["sub"])
             if sub_str:
-                parts.append(f["name"] + "{" + sub_str + "}")
+                parts.append(name + "{" + sub_str + "}")
     return " ".join(parts)
 
 def tree_to_lines(tree, indent=0):
-    """Renderiza arvore como linhas HTML."""
+    """Renderiza arvore como linhas para exibicao."""
+    if not tree or not isinstance(tree, dict):
+        return []
     lines = []
-    prefix = "&nbsp;" * (indent * 4)
+    prefix = "    " * indent
     for f in tree.get("fields", []):
-        ts = str(f.get("type", "?"))
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name", "?")
+        ts = str(f.get("type_name", "?"))
         if f.get("is_list"):
             ts = "[" + ts + "]"
         if f.get("is_scalar"):
-            lines.append(prefix + '<span class="field">' + f["name"]
-                         + '</span><span class="scalar"> : ' + ts + '</span>')
+            lines.append(prefix + name + " : " + ts)
         else:
-            lines.append(prefix + '<span class="field">' + f["name"]
-                         + '</span><span class="nested"> : ' + ts + '</span>')
-            if "sub" in f:
+            lines.append(prefix + name + " : " + ts + " (OBJECT)")
+            if "sub" in f and isinstance(f["sub"], dict):
                 lines.extend(tree_to_lines(f["sub"], indent + 1))
     return lines
 
 # ================================================================
-# CLASSIFY ARGS + BUILD QUERY
-# ================================================================
-def classify_arg(name):
-    low = name.lower().replace("_", "")
-    if any(k in low for k in ["start", "begin", "from", "since"]):
-        if any(k in low for k in ["time", "date", "purchase", "created"]):
-            return "start"
-    if any(k in low for k in ["end", "finish", "to", "until"]):
-        if any(k in low for k in ["time", "date", "purchase", "created"]):
-            return "end"
-    if low in ("limit", "pagesize", "size", "count", "first", "top"):
-        return "limit"
-    if any(k in low for k in ["scroll", "cursor", "token", "offset", "page", "after"]):
-        return "cursor"
-    return "unknown"
-
-def build_dynamic_query(root_field, args_info, start_ts, end_ts,
-                        limit, fields_str, page_info_str=None, token=None):
-    """Constroi query dinamicamente baseado nos args descobertos."""
-    arg_parts = []
-
-    for a in args_info:
-        cls = classify_arg(a["name"])
-        if cls == "start":
-            arg_parts.append(a["name"] + ":" + str(start_ts))
-        elif cls == "end":
-            arg_parts.append(a["name"] + ":" + str(end_ts))
-        elif cls == "limit":
-            arg_parts.append(a["name"] + ":" + str(limit))
-        elif cls == "cursor":
-            if token:
-                # Verificar se eh tipo String
-                if a.get("type") in ("String", "ID"):
-                    arg_parts.append(a["name"] + ':"' + str(token) + '"')
-                else:
-                    arg_parts.append(a["name"] + ":" + str(token))
-            # Se nao tem token, OMITIR (nao mandar vazio)
-
-    args_str = ",".join(arg_parts)
-
-    # Montar body
-    body = "{" + fields_str + "}"
-
-    # Se temos page info, incluir
-    if page_info_str:
-        body = "{nodes{" + fields_str + "} " + page_info_str + "}"
-    else:
-        # Tentar formato simples
-        body = "{" + fields_str + "}"
-
-    q = "{" + root_field
-    if args_str:
-        q += "(" + args_str + ")"
-    q += body + "}"
-    return q
-
-# ================================================================
-# FETCH WITH PAGINATION
-# ================================================================
-def fetch_data(app_id, secret, root_field, args_info, start_ts, end_ts,
-               node_fields_str, return_structure):
-    """
-    Busca dados com paginacao automatica.
-    return_structure indica como os dados estao organizados.
-    """
-    all_nodes = []
-    token = None
-    page = 0
-    last_q = ""
-
-    # Descobrir estrutura de paginacao
-    has_connection = return_structure.get("has_connection", False)
-    list_field = return_structure.get("list_field")
-    page_info_field = return_structure.get("page_info_field")
-    page_info_fields_str = return_structure.get("page_info_fields_str", "")
-    token_field = return_structure.get("token_field", "searchNextToken")
-    has_next_field = return_structure.get("has_next_field")
-
-    while page < MAX_PAGES:
-        if has_connection:
-            # Formato Connection: {rootField(...){nodes{...} pageInfo{...}}}
-            inner = ""
-            if list_field:
-                inner += list_field + "{" + node_fields_str + "}"
-            else:
-                inner += node_fields_str
-
-            if page_info_field and page_info_fields_str:
-                inner += " " + page_info_field + "{" + page_info_fields_str + "}"
-
-            arg_parts = []
-            for a in args_info:
-                cls = classify_arg(a["name"])
-                if cls == "start":
-                    arg_parts.append(a["name"] + ":" + str(start_ts))
-                elif cls == "end":
-                    arg_parts.append(a["name"] + ":" + str(end_ts))
-                elif cls == "limit":
-                    arg_parts.append(a["name"] + ":" + str(PAGE_SIZE))
-                elif cls == "cursor" and token:
-                    if a.get("type") in ("String", "ID"):
-                        arg_parts.append(a["name"] + ':"' + str(token) + '"')
-                    else:
-                        arg_parts.append(a["name"] + ":" + str(token))
-
-            q = "{" + root_field
-            if arg_parts:
-                q += "(" + ",".join(arg_parts) + ")"
-            q += "{" + inner + "}}"
-
-        else:
-            # Formato simples: {rootField(...){field1 field2 ...}}
-            arg_parts = []
-            for a in args_info:
-                cls = classify_arg(a["name"])
-                if cls == "start":
-                    arg_parts.append(a["name"] + ":" + str(start_ts))
-                elif cls == "end":
-                    arg_parts.append(a["name"] + ":" + str(end_ts))
-                elif cls == "limit":
-                    arg_parts.append(a["name"] + ":" + str(PAGE_SIZE))
-                elif cls == "cursor" and token:
-                    if a.get("type") in ("String", "ID"):
-                        arg_parts.append(a["name"] + ':"' + str(token) + '"')
-                    else:
-                        arg_parts.append(a["name"] + ":" + str(token))
-
-            q = "{" + root_field
-            if arg_parts:
-                q += "(" + ",".join(arg_parts) + ")"
-            q += "{" + node_fields_str + "}}"
-
-        last_q = q
-
-        try:
-            result = _sign_and_call(app_id, secret, q)
-        except requests.exceptions.HTTPError as exc:
-            code = getattr(exc.response, "status_code", "?")
-            body = ""
-            if exc.response is not None:
-                body = exc.response.text[:500]
-            return all_nodes, "HTTP " + str(code) + ": " + body, q
-        except Exception as exc:
-            return all_nodes, str(exc), q
-
-        if "errors" in result:
-            msg = result["errors"][0].get("message", str(result["errors"]))
-            return all_nodes, "GraphQL: " + msg, q
-
-        data = result.get("data", {}).get(root_field, {})
-
-        # Extrair nodes
-        nodes = []
-        if has_connection and list_field and list_field in data:
-            nodes = data[list_field]
-            if not isinstance(nodes, list):
-                nodes = []
-        elif isinstance(data, list):
-            nodes = data
-        elif isinstance(data, dict):
-            # Procurar lista nos valores
-            for k, v in data.items():
-                if isinstance(v, list):
-                    nodes = v
-                    break
-            if not nodes:
-                # O proprio data eh um unico resultado
-                nodes = [data]
-
-        all_nodes.extend(nodes)
-
-        if not nodes:
-            break
-
-        # Paginacao
-        if has_connection and page_info_field:
-            pi = data.get(page_info_field, {})
-            if isinstance(pi, dict):
-                new_tok = pi.get(token_field)
-                has_next = pi.get(has_next_field, False) if has_next_field else bool(new_tok)
-                if has_next and new_tok and str(new_tok) != str(token):
-                    token = str(new_tok)
-                else:
-                    break
-            else:
-                break
-        else:
-            # Sem paginacao em formato simples
-            break
-
-        page += 1
-
-    return all_nodes, None, last_q
-
-# ================================================================
-# PROCESSAMENTO
-# ================================================================
-def _is_blacklisted(status):
-    s = (status or "").lower()
-    return any(bl in s for bl in BLACKLIST)
-
-def extract_commission(order):
-    """
-    Extrai comissao de qualquer formato de pedido.
-    Busca em campos diretos, items, extInfo, etc.
-    """
-    # Campos comuns de comissao
-    comm_keys = ["netCommission", "commission", "commissionAmount",
-                 "affiliateCommission", "estimatedCommission", "amount",
-                 "netAmount", "payout", "earning", "earnings"]
-    est_keys = ["estimatedTotalCommission", "estimatedCommission",
-                "pendingCommission", "estimatedAmount"]
-    status_keys = ["conversionStatus", "orderStatus", "status",
-                   "displayStatus", "itemStatus"]
-
-    net = 0.0
-    est = 0.0
-    status = "-"
-
-    # Busca direta no order
-    for k in comm_keys:
-        v = _sf(order.get(k))
-        if v > 0:
-            net = v
-            break
-
-    for k in est_keys:
-        v = _sf(order.get(k))
-        if v > 0:
-            est = v
-            break
-
-    for k in status_keys:
-        v = order.get(k)
-        if v and str(v) != "-":
-            status = str(v)
-            break
-
-    # Buscar em sub-objetos
-    if net == 0 and est == 0:
-        # Tentar em items
-        items = order.get("items", [])
-        if isinstance(items, list):
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                for k in comm_keys:
-                    v = _sf(item.get(k))
-                    if v > 0:
-                        net += v
-                        break
-                for k in est_keys:
-                    v = _sf(item.get(k))
-                    if v > 0:
-                        est += v
-                        break
-                if status == "-":
-                    for k in status_keys:
-                        v = item.get(k)
-                        if v:
-                            status = str(v)
-                            break
-
-        # Tentar em extInfo
-        ext = order.get("extInfo")
-        if isinstance(ext, dict):
-            for k in comm_keys:
-                v = _sf(ext.get(k))
-                if v > 0:
-                    net += v
-                    break
-            for k in est_keys:
-                v = _sf(ext.get(k))
-                if v > 0:
-                    est += v
-                    break
-            if status == "-":
-                for k in status_keys:
-                    v = ext.get(k)
-                    if v:
-                        status = str(v)
-                        break
-
-    # Tentar actualAmount dos items como fallback
-    if net == 0 and est == 0:
-        items = order.get("items", [])
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    aa = _sf(item.get("actualAmount"))
-                    if aa > 0:
-                        est += aa
-
-    if net > 0:
-        return net, status, "Concluido"
-    if est > 0:
-        return est, status, "Pendente"
-    return 0.0, status, "Pendente"
-
-def process(raw):
-    total_raw = len(raw)
-    valid = []
-    for o in raw:
-        comm, status, ctype = extract_commission(o)
-        if _is_blacklisted(status):
-            continue
-        # Extrair timestamp
-        ts = 0
-        for k in ["purchaseTime", "createdTime", "createTime", "timestamp",
-                   "time", "date", "created_at", "purchase_time"]:
-            v = o.get(k)
-            if v and (isinstance(v, (int, float)) and v > 1000000000):
-                ts = int(v)
-                break
-
-        valid.append({
-            "ts": ts,
-            "status": status,
-            "commission": comm,
-            "type": ctype,
-            "raw": o,
-        })
-    return valid, total_raw
-
-# ================================================================
-# UI COMPONENTS
+# UI HELPERS
 # ================================================================
 def card(label, value, sub="", css=""):
     vc = "m-value " + css if css else "m-value"
@@ -603,7 +285,7 @@ with st.sidebar:
     app_id = st.text_input("App ID", value=_def_id, type="password")
     secret = st.text_input("Secret Key", value=_def_sk, type="password")
     st.markdown("---")
-    st.caption("Usa conversionReport (acessivel) em vez de partnerOrderReport (bloqueado)")
+    st.caption("Usa conversionReport (acessivel)")
 
 # ================================================================
 # HEADER
@@ -611,7 +293,7 @@ with st.sidebar:
 st.markdown('<div class="hdr">Shopee Affiliates</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="hdr-sub">'
-    "Dashboard de Comissoes - conversionReport + Auto-Discovery"
+    "Dashboard de Comissoes - conversionReport"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -654,7 +336,7 @@ if not go:
     st.markdown(
         '<div class="empty-state">'
         '<div class="title">Selecione um periodo e clique Consultar</div>'
-        '<div class="desc">Usa conversionReport para dados de comissao</div>'
+        '<div class="desc">conversionReport com auto-discovery</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -672,233 +354,211 @@ start_ts = to_unix(start_date, end_of_day=False)
 end_ts = to_unix(end_date, end_of_day=True)
 
 # ================================================================
-# FASE 1: INTROSPECT conversionReport
+# FASE 1: INTROSPECT ConversionReportConnection
 # ================================================================
-st.markdown("#### Fase 1: Estrutura de conversionReport")
+st.markdown("#### Fase 1: Estrutura de ConversionReportConnection")
 
-with st.spinner("Introspectando conversionReport..."):
-    cr_detail, cr_err = get_field_detail(app_id, secret, "conversionReport")
+with st.spinner("Introspectando ConversionReportConnection..."):
+    conn_fields, conn_err = introspect_type_fields(app_id, secret, "ConversionReportConnection")
 
-if cr_err:
-    st.error("Erro: " + cr_err)
+if conn_err:
+    st.error("Erro: " + conn_err)
     st.stop()
 
-cr_args = cr_detail.get("args", [])
-cr_return_type = cr_detail.get("return_type")
-cr_return_kind = cr_detail.get("return_kind")
-cr_return_list = cr_detail.get("return_is_list", False)
+conn_field_names = [f["name"] for f in conn_fields]
+show_disc("Campos connection", ", ".join(conn_field_names))
 
-show_disc("Return type", str(cr_return_type) + " (" + str(cr_return_kind) + ")"
-          + (" [LIST]" if cr_return_list else ""))
+# Identificar campo de lista (nodes)
+list_field = None
+list_type = None
+for f in conn_fields:
+    if f["name"] == "nodes" or (f.get("is_list") and not f.get("is_scalar")):
+        list_field = f["name"]
+        list_type = f.get("type_name")
+        break
 
-required = [a for a in cr_args if a.get("required")]
-optional = [a for a in cr_args if not a.get("required")]
+# Identificar campo scrollId
+has_scroll = "scrollId" in conn_field_names
+has_more = "more" in conn_field_names
 
-if required:
-    show_disc("Args obrigatorios",
-              ", ".join(a["name"] + ":" + str(a["type"]) for a in required))
-if optional:
-    show_disc("Args opcionais",
-              ", ".join(a["name"] + ":" + str(a["type"]) for a in optional))
+# Outros campos de paginacao
+page_fields = []
+for f in conn_fields:
+    if f.get("is_scalar") and f["name"] not in (list_field,):
+        page_fields.append(f["name"])
 
-# Mapeamento de args
-mapped = []
-unmapped = []
-for a in cr_args:
-    cls = classify_arg(a["name"])
-    if cls != "unknown":
-        mapped.append(a["name"] + " -> " + cls)
-    else:
-        unmapped.append(a["name"] + " (" + str(a["type"]) + ")")
-
-show_disc("Args mapeados", ", ".join(mapped) if mapped else "nenhum")
-if unmapped:
-    show_disc("Args nao mapeados", ", ".join(unmapped), status="warn")
+show_disc("Campo lista", str(list_field) + " -> " + str(list_type))
+show_disc("scrollId", "SIM" if has_scroll else "NAO")
+show_disc("more", "SIM" if has_more else "NAO")
+show_disc("Outros campos", ", ".join(page_fields) if page_fields else "nenhum")
 
 st.markdown('<hr class="sep">', unsafe_allow_html=True)
 
 # ================================================================
-# FASE 2: DEEP INTROSPECT DO RETURN TYPE
+# FASE 2: INTROSPECT NODE TYPE
 # ================================================================
-st.markdown("#### Fase 2: Estrutura de " + str(cr_return_type))
+node_type = list_type or "ConversionReport"
+st.markdown("#### Fase 2: Estrutura de " + node_type)
 
-with st.spinner("Deep introspection de " + str(cr_return_type) + "..."):
-    ret_tree = get_type_fields_deep(app_id, secret, cr_return_type, max_depth=3)
+with st.spinner("Deep introspection de " + node_type + "..."):
+    node_tree = introspect_deep(app_id, secret, node_type, depth=3)
 
-tree_lines = tree_to_lines(ret_tree)
+tree_lines = tree_to_lines(node_tree)
 if tree_lines:
-    st.markdown(
-        '<div class="tree">' + "<br>".join(tree_lines) + "</div>",
-        unsafe_allow_html=True,
-    )
+    st.code("\n".join(tree_lines))
 
-# Analisar estrutura
-ret_fields = ret_tree.get("fields", [])
-ret_field_names = [f["name"] for f in ret_fields]
+node_fields_str = fields_from_tree(node_tree)
+show_disc("Campos auto-gerados", node_fields_str if node_fields_str else "VAZIO")
 
-# Descobrir se eh Connection type (tem nodes + pageInfo)
-has_nodes = "nodes" in ret_field_names
-has_connection = has_nodes
-
-# Encontrar campos de paginacao
-page_info_candidates = [f for f in ret_fields
-                        if any(k in f["name"].lower() for k in ["page", "scroll", "next", "cursor"])]
-page_info_field = None
-page_info_fields_str = ""
-token_field_name = None
-has_next_field_name = None
-
-if page_info_candidates:
-    pf = page_info_candidates[0]
-    page_info_field = pf["name"]
-    if "sub" in pf and pf["sub"].get("fields"):
-        pi_fields = pf["sub"]["fields"]
-        pi_scalar_names = [f["name"] for f in pi_fields if f.get("is_scalar")]
-        page_info_fields_str = " ".join(pi_scalar_names)
-        for f in pi_fields:
-            n = f["name"].lower()
-            if "token" in n or "cursor" in n:
-                token_field_name = f["name"]
-            if "hasnext" in n or "has_next" in n or "hasmore" in n:
-                has_next_field_name = f["name"]
-
-# Descobrir o tipo do node (se connection)
-node_tree = None
-node_fields_str = ""
-if has_nodes:
-    for f in ret_fields:
-        if f["name"] == "nodes" and "sub" in f:
-            node_tree = f["sub"]
-            break
-
-    if node_tree:
-        node_fields_str = fields_from_tree(node_tree)
-    else:
-        # Introspeccionar tipo do node manualmente
-        for f in ret_fields:
-            if f["name"] == "nodes" and f.get("type"):
-                with st.spinner("Introspectando " + f["type"] + "..."):
-                    node_tree = get_type_fields_deep(app_id, secret, f["type"], max_depth=2)
-                    node_fields_str = fields_from_tree(node_tree)
-                break
-else:
-    # Nao eh connection, usar campos diretos
-    node_fields_str = fields_from_tree(ret_tree)
-
-show_disc("Formato", "Connection" if has_connection else "Direto")
-show_disc("Node fields", node_fields_str if node_fields_str else "VAZIO")
-if page_info_field:
-    show_disc("Page info", page_info_field + "{" + page_info_fields_str + "}")
-if token_field_name:
-    show_disc("Token field", token_field_name)
-
-# Se node_fields vazio, tentar ALL scalar fields
+# Se vazio, tentar apenas escalares diretos
 if not node_fields_str:
-    if has_connection and node_tree:
-        scalars = [f["name"] for f in node_tree.get("fields", []) if f.get("is_scalar")]
+    with st.spinner("Tentando campos escalares de " + node_type + "..."):
+        node_fields_list, nf_err = introspect_type_fields(app_id, secret, node_type)
+    if not nf_err and node_fields_list:
+        scalars = [f["name"] for f in node_fields_list if f.get("is_scalar")]
         node_fields_str = " ".join(scalars)
+        show_disc("Fallback escalares", node_fields_str, status="warn")
     else:
-        scalars = [f["name"] for f in ret_fields if f.get("is_scalar")]
-        node_fields_str = " ".join(scalars)
+        show_disc("Erro", str(nf_err), status="err")
 
-    if node_fields_str:
-        show_disc("Fallback campos", node_fields_str, status="warn")
+# Listar TODOS os campos do node (para analise)
+all_node_fields, _ = introspect_type_fields(app_id, secret, node_type)
+all_field_names = [f["name"] for f in all_node_fields]
+show_disc("Todos campos do node", ", ".join(all_field_names))
+
+# Verificar campos de comissao
+commission_fields = [n for n in all_field_names
+                     if any(k in n.lower() for k in ["commission", "amount", "earning",
+                                                      "payout", "net", "estimated", "revenue"])]
+status_fields = [n for n in all_field_names
+                 if any(k in n.lower() for k in ["status", "conversion"])]
+time_fields = [n for n in all_field_names
+               if any(k in n.lower() for k in ["time", "date", "created"])]
+
+if commission_fields:
+    show_disc("Campos de comissao encontrados", ", ".join(commission_fields))
+else:
+    show_disc("Campos de comissao", "Nenhum direto - pode estar em sub-objetos", status="warn")
+
+if status_fields:
+    show_disc("Campos de status", ", ".join(status_fields))
+if time_fields:
+    show_disc("Campos de tempo", ", ".join(time_fields))
 
 st.markdown('<hr class="sep">', unsafe_allow_html=True)
 
 # ================================================================
-# FASE 3: TESTAR QUERY
+# FASE 3: MONTAR E TESTAR QUERY
 # ================================================================
 st.markdown("#### Fase 3: Testando query")
 
-return_structure = {
-    "has_connection": has_connection,
-    "list_field": "nodes" if has_connection else None,
-    "page_info_field": page_info_field,
-    "page_info_fields_str": page_info_fields_str,
-    "token_field": token_field_name or "searchNextToken",
-    "has_next_field": has_next_field_name,
-}
+# Construir args
+test_args = "purchaseTimeStart:" + str(start_ts) + ",purchaseTimeEnd:" + str(end_ts) + ",limit:2"
 
-# Montar query de teste (limit=2)
-test_args = []
-for a in cr_args:
-    cls = classify_arg(a["name"])
-    if cls == "start":
-        test_args.append(a["name"] + ":" + str(start_ts))
-    elif cls == "end":
-        test_args.append(a["name"] + ":" + str(end_ts))
-    elif cls == "limit":
-        test_args.append(a["name"] + ":2")
+# Construir body
+extra_conn_fields = ""
+if has_scroll:
+    extra_conn_fields += " scrollId"
+if has_more:
+    extra_conn_fields += " more"
+# Outros campos escalares do connection
+for pf in page_fields:
+    if pf not in ("scrollId", "more"):
+        extra_conn_fields += " " + pf
 
-if has_connection:
-    test_inner = "nodes{" + node_fields_str + "}"
-    if page_info_field and page_info_fields_str:
-        test_inner += " " + page_info_field + "{" + page_info_fields_str + "}"
-    test_q = "{conversionReport(" + ",".join(test_args) + "){" + test_inner + "}}"
+if list_field and node_fields_str:
+    test_body = list_field + "{" + node_fields_str + "}" + extra_conn_fields
 else:
-    test_q = "{conversionReport(" + ",".join(test_args) + "){" + node_fields_str + "}}"
+    test_body = node_fields_str + extra_conn_fields
+
+test_q = "{conversionReport(" + test_args + "){" + test_body + "}}"
 
 with st.expander("Query de teste"):
     st.code(test_q, language="graphql")
 
-with st.spinner("Testando query..."):
+# Testar
+with st.spinner("Testando..."):
     try:
         test_result = _sign_and_call(app_id, secret, test_q)
     except Exception as exc:
-        st.error("Erro: " + str(exc))
-        st.stop()
+        test_result = {"errors": [{"message": str(exc)}]}
 
 if "errors" in test_result:
-    msg = test_result["errors"][0].get("message", str(test_result["errors"]))
-    st.error("Erro na query de teste: " + msg)
+    err_msg = test_result["errors"][0].get("message", str(test_result["errors"]))
+    show_disc("Teste completo", err_msg, status="err")
 
-    # Tentar variantes
+    # Tentar variante minima
     st.markdown("##### Tentando variantes...")
 
-    # Variante: sem args de tempo (talvez nao use timestamps)
-    test_q2 = "{conversionReport{" + (("nodes{" + node_fields_str + "}") if has_connection else node_fields_str) + "}}"
-    with st.spinner("Sem args..."):
-        try:
-            r2 = _sign_and_call(app_id, secret, test_q2)
-            if "errors" not in r2:
-                show_disc("Sem args", "SUCESSO!", status="ok")
-                test_result = r2
-                cr_args = []  # Nao precisa args
-            else:
-                show_disc("Sem args", r2["errors"][0].get("message", "")[:80], status="err")
-        except Exception as e2:
-            show_disc("Sem args", str(e2)[:80], status="err")
+    # Variante 1: Apenas campos escalares diretos, sem sub-objetos
+    scalars_only = " ".join(f["name"] for f in all_node_fields if f.get("is_scalar"))
+    if scalars_only:
+        q_v1 = "{conversionReport(" + test_args + "){" + list_field + "{" + scalars_only + "}" + extra_conn_fields + "}}"
+        with st.spinner("Apenas escalares..."):
+            try:
+                r_v1 = _sign_and_call(app_id, secret, q_v1)
+                if "errors" not in r_v1:
+                    show_disc("Apenas escalares", "SUCESSO!", status="ok")
+                    test_result = r_v1
+                    node_fields_str = scalars_only
+                else:
+                    show_disc("Apenas escalares", r_v1["errors"][0].get("message", "")[:80], status="err")
+            except Exception as e1:
+                show_disc("Apenas escalares", str(e1)[:60], status="err")
 
-    # Variante: apenas __typename
-    test_q3 = "{conversionReport{__typename}}"
-    with st.spinner("Apenas __typename..."):
-        try:
-            r3 = _sign_and_call(app_id, secret, test_q3)
-            if "errors" not in r3:
-                show_disc("__typename", str(r3.get("data", {})), status="ok")
-            else:
-                show_disc("__typename", r3["errors"][0].get("message", "")[:80], status="err")
-        except Exception as e3:
-            show_disc("__typename", str(e3)[:80], status="err")
+    # Variante 2: Sem completeTime nos args
+    if "errors" in test_result:
+        for fields_try in [scalars_only, node_fields_str]:
+            if not fields_try:
+                continue
+            body_try = list_field + "{" + fields_try + "}" + extra_conn_fields if list_field else fields_try + extra_conn_fields
+            q_v2 = "{conversionReport(purchaseTimeStart:" + str(start_ts) + ",purchaseTimeEnd:" + str(end_ts) + ",limit:2){" + body_try + "}}"
+            with st.spinner("Sem completeTime..."):
+                try:
+                    r_v2 = _sign_and_call(app_id, secret, q_v2)
+                    if "errors" not in r_v2:
+                        show_disc("Sem completeTime", "SUCESSO!", status="ok")
+                        test_result = r_v2
+                        node_fields_str = fields_try
+                        break
+                    else:
+                        show_disc("Sem completeTime", r_v2["errors"][0].get("message", "")[:80], status="err")
+                except Exception as e2:
+                    show_disc("Sem completeTime", str(e2)[:60], status="err")
+
+    # Variante 3: Sem nenhum arg
+    if "errors" in test_result:
+        body_try = list_field + "{" + scalars_only + "}" + extra_conn_fields if list_field and scalars_only else "__typename"
+        q_v3 = "{conversionReport{" + body_try + "}}"
+        with st.spinner("Sem args..."):
+            try:
+                r_v3 = _sign_and_call(app_id, secret, q_v3)
+                if "errors" not in r_v3:
+                    show_disc("Sem args", "SUCESSO!", status="ok")
+                    test_result = r_v3
+                else:
+                    show_disc("Sem args", r_v3["errors"][0].get("message", "")[:80], status="err")
+            except Exception as e3:
+                show_disc("Sem args", str(e3)[:60], status="err")
 
     if "errors" in test_result:
+        st.error("Nenhuma variante funcionou")
         with st.expander("Debug completo"):
             st.json({
-                "cr_args": cr_args,
-                "cr_return_type": cr_return_type,
+                "conn_fields": conn_field_names,
+                "node_type": node_type,
+                "all_node_fields": all_field_names,
                 "node_fields_str": node_fields_str,
-                "return_structure": return_structure,
+                "scalars_only": scalars_only if scalars_only else "",
                 "test_query": test_q,
-                "test_result": test_result,
-                "tree": json.loads(json.dumps(ret_tree, default=str)),
+                "errors": test_result.get("errors"),
             })
         st.stop()
-
-show_disc("Teste", "SUCESSO!", status="ok")
+else:
+    show_disc("Teste", "SUCESSO!", status="ok")
 
 # Mostrar amostra
-with st.expander("Resposta do teste"):
+with st.expander("Resposta do teste (amostra)"):
     st.json(test_result)
 
 st.markdown('<hr class="sep">', unsafe_allow_html=True)
@@ -908,30 +568,230 @@ st.markdown('<hr class="sep">', unsafe_allow_html=True)
 # ================================================================
 st.markdown("#### Fase 4: Buscando todos os dados")
 
-with st.spinner("Buscando dados com paginacao..."):
-    raw_data, fetch_err, last_q = fetch_data(
-        app_id, secret, "conversionReport", cr_args,
-        start_ts, end_ts, node_fields_str, return_structure
-    )
+all_nodes = []
+scroll_id = None
+page = 0
+last_query = ""
+fetch_err = None
+
+while page < MAX_PAGES:
+    # Construir args
+    args_parts = [
+        "purchaseTimeStart:" + str(start_ts),
+        "purchaseTimeEnd:" + str(end_ts),
+        "limit:" + str(PAGE_SIZE),
+    ]
+    # Adicionar scrollId APENAS se temos um
+    if scroll_id:
+        args_parts.append('scrollId:"' + str(scroll_id) + '"')
+
+    args_str = ",".join(args_parts)
+
+    # Construir body
+    body = ""
+    if list_field:
+        body = list_field + "{" + node_fields_str + "}"
+    else:
+        body = node_fields_str
+
+    if has_scroll:
+        body += " scrollId"
+    if has_more:
+        body += " more"
+
+    q = "{conversionReport(" + args_str + "){" + body + "}}"
+    last_query = q
+
+    with st.spinner("Pagina " + str(page + 1) + "..."):
+        try:
+            result = _sign_and_call(app_id, secret, q)
+        except requests.exceptions.HTTPError as exc:
+            code = getattr(exc.response, "status_code", "?")
+            b = ""
+            if exc.response is not None:
+                b = exc.response.text[:500]
+            fetch_err = "HTTP " + str(code) + ": " + b
+            break
+        except Exception as exc:
+            fetch_err = str(exc)
+            break
+
+    if "errors" in result:
+        fetch_err = "GraphQL: " + result["errors"][0].get("message", str(result["errors"]))
+        break
+
+    data = result.get("data", {}).get("conversionReport", {})
+
+    # Extrair nodes
+    nodes = []
+    if list_field and list_field in data:
+        nodes = data.get(list_field, [])
+        if not isinstance(nodes, list):
+            nodes = []
+    elif isinstance(data, list):
+        nodes = data
+    elif isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                nodes = v
+                break
+
+    all_nodes.extend(nodes)
+
+    if not nodes:
+        break
+
+    # Paginacao
+    new_scroll = data.get("scrollId")
+    has_more_val = data.get("more", False)
+
+    if has_more_val and new_scroll and str(new_scroll) != str(scroll_id):
+        scroll_id = str(new_scroll)
+    else:
+        break
+
+    page += 1
 
 if fetch_err:
     st.error(fetch_err)
     with st.expander("Debug"):
-        st.code("Ultima query:\n" + last_q, language="graphql")
+        st.code("Ultima query:\n" + last_query, language="graphql")
     st.stop()
 
-show_disc("Registros obtidos", str(len(raw_data)))
+show_disc("Total registros", str(len(all_nodes)))
+show_disc("Paginas", str(page + 1))
 
-if raw_data:
-    with st.expander("Amostra dados brutos (" + str(min(3, len(raw_data))) + " registros)"):
-        st.json(raw_data[:3])
+if all_nodes:
+    with st.expander("Amostra dados brutos (" + str(min(3, len(all_nodes))) + " registros)"):
+        st.json(all_nodes[:3])
 
 st.markdown('<hr class="sep">', unsafe_allow_html=True)
 
 # ================================================================
 # FASE 5: PROCESSAR E EXIBIR
 # ================================================================
-valid_orders, total_raw = process(raw_data)
+
+def _is_blacklisted(status):
+    s = (status or "").lower()
+    return any(bl in s for bl in BLACKLIST)
+
+# Primeiro, analisar a estrutura dos dados reais
+if all_nodes:
+    sample = all_nodes[0]
+    sample_keys = list(sample.keys()) if isinstance(sample, dict) else []
+    show_disc("Campos no primeiro registro", ", ".join(sample_keys))
+
+    # Auto-detectar campos de comissao nos dados reais
+    comm_val_keys = []
+    status_val_key = None
+    time_val_key = None
+    id_val_key = None
+
+    for k in sample_keys:
+        v = sample.get(k)
+        # Detectar campos numericos que parecem comissao
+        if any(kw in k.lower() for kw in ["commission", "amount", "earning",
+                                           "payout", "net", "estimated", "revenue"]):
+            comm_val_keys.append(k)
+        # Detectar status
+        if any(kw in k.lower() for kw in ["status", "conversion"]):
+            if status_val_key is None:
+                status_val_key = k
+        # Detectar tempo
+        if any(kw in k.lower() for kw in ["time", "date", "created"]):
+            if v and (isinstance(v, (int, float)) and v > 1000000000):
+                if time_val_key is None:
+                    time_val_key = k
+        # Detectar ID
+        if any(kw in k.lower() for kw in ["id", "order"]):
+            if id_val_key is None:
+                id_val_key = k
+
+    if comm_val_keys:
+        show_disc("Campos de comissao detectados", ", ".join(comm_val_keys))
+    if status_val_key:
+        show_disc("Campo de status", status_val_key)
+    if time_val_key:
+        show_disc("Campo de tempo", time_val_key)
+
+# Processar
+valid_orders = []
+total_raw = len(all_nodes)
+
+for o in all_nodes:
+    if not isinstance(o, dict):
+        continue
+
+    # Extrair comissao - tentar varios campos
+    net = 0.0
+    est = 0.0
+
+    for k in ["netCommission", "commission", "commissionAmount",
+              "affiliateCommission", "netAmount", "payout",
+              "earning", "earnings", "net_commission"]:
+        v = _sf(o.get(k))
+        if v > 0:
+            net = v
+            break
+
+    for k in ["estimatedTotalCommission", "estimatedCommission",
+              "pendingCommission", "estimatedAmount",
+              "estimated_commission", "estimated_total_commission"]:
+        v = _sf(o.get(k))
+        if v > 0:
+            est = v
+            break
+
+    # Se nao achou em campos diretos, tentar actualAmount
+    if net == 0 and est == 0:
+        for k in ["actualAmount", "amount", "totalAmount", "orderAmount",
+                   "purchaseAmount", "saleAmount"]:
+            v = _sf(o.get(k))
+            if v > 0:
+                est = v
+                break
+
+    # Extrair status
+    status = "-"
+    for k in ["conversionStatus", "orderStatus", "status",
+              "displayStatus", "conversion_status"]:
+        v = o.get(k)
+        if v and str(v).strip() and str(v) != "None":
+            status = str(v)
+            break
+
+    # Filtro blacklist
+    if _is_blacklisted(status):
+        continue
+
+    # Extrair timestamp
+    ts = 0
+    for k in ["purchaseTime", "createdTime", "createTime", "timestamp",
+              "time", "created_at", "purchase_time", "completeTime"]:
+        v = o.get(k)
+        if v and isinstance(v, (int, float)) and v > 1000000000:
+            ts = int(v)
+            break
+
+    # Tipo
+    if net > 0:
+        ctype = "Concluido"
+        comm = net
+    elif est > 0:
+        ctype = "Pendente"
+        comm = est
+    else:
+        ctype = "Pendente"
+        comm = 0.0
+
+    valid_orders.append({
+        "ts": ts,
+        "status": status,
+        "commission": comm,
+        "type": ctype,
+        "raw": o,
+    })
+
 total_valid = len(valid_orders)
 total_comm = sum(o["commission"] for o in valid_orders)
 conv_rate = (total_valid / total_raw * 100) if total_raw > 0 else 0.0
@@ -980,23 +840,23 @@ if valid_orders:
                 return "-"
         return "-"
 
-    df = pd.DataFrame(valid_orders)
-    df["Data/Hora"] = df["ts"].apply(_fmt_ts)
-    df["Status"] = df["status"]
-    df["Tipo"] = df["type"]
-    df["Comissao"] = df["commission"].apply(brl)
+    df = pd.DataFrame([{
+        "Data/Hora": _fmt_ts(o["ts"]),
+        "Status": o["status"],
+        "Tipo": o["type"],
+        "Comissao": brl(o["commission"]),
+    } for o in valid_orders])
 
-    cols = ["Data/Hora", "Status", "Tipo", "Comissao"]
-    display = (
-        df[cols]
-        .sort_values("Data/Hora", ascending=False)
-        .reset_index(drop=True)
-    )
+    display = df.sort_values("Data/Hora", ascending=False).reset_index(drop=True)
     st.dataframe(display, use_container_width=True, hide_index=True,
                  height=min(520, 36 * len(display) + 40))
+
+elif total_raw > 0:
+    st.markdown('<hr class="sep">', unsafe_allow_html=True)
+    st.warning("Todos os " + str(total_raw) + " registros foram filtrados pela blacklist")
 else:
     st.markdown('<hr class="sep">', unsafe_allow_html=True)
-    st.info("Nenhum pedido valido: "
+    st.info("Nenhum registro retornado para "
             + start_date.strftime("%d/%m/%Y") + " - "
             + end_date.strftime("%d/%m/%Y"))
 
@@ -1005,14 +865,16 @@ with st.expander("Debug completo"):
     st.json({
         "endpoint": ENDPOINT,
         "root_field": "conversionReport",
-        "args": cr_args,
-        "return_type": cr_return_type,
-        "return_structure": return_structure,
+        "conn_fields": conn_field_names,
+        "node_type": node_type,
         "node_fields": node_fields_str,
+        "all_node_field_names": all_field_names,
+        "has_scroll": has_scroll,
+        "has_more": has_more,
         "start_ts": start_ts,
         "end_ts": end_ts,
         "total_raw": total_raw,
         "total_valid": total_valid,
-        "last_query": last_q,
-        "tree": json.loads(json.dumps(ret_tree, default=str)),
+        "pages_fetched": page + 1,
+        "last_query": last_query,
     })
