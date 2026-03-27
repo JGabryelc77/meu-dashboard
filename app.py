@@ -27,15 +27,12 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (COM CAPTURA DO TEXTO REAL DA SHOPEE) ---
-def buscar_vendas_shopee_api(data_ini, data_fim):
+# --- 2. FUNÇÃO API SHOPEE (DINÂMICA) ---
+def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
     try:
         app_id = st.secrets["SHOPEE_APP_ID"]
         secret = st.secrets["SHOPEE_SECRET"]
         timestamp = int(time.time())
-        
-        # Testando a rota padrão da Shopee Open Platform
-        url = "https://partner.shopeemobile.com/api/v2/affiliate/get_order_list"
         
         payload = {
             "start_time": int(time.mktime(data_ini.timetuple())),
@@ -44,7 +41,6 @@ def buscar_vendas_shopee_api(data_ini, data_fim):
         }
         
         payload_str = json.dumps(payload, separators=(',', ':'))
-        
         base_string = f"{app_id}{timestamp}{payload_str}{secret}"
         signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
         
@@ -55,17 +51,17 @@ def buscar_vendas_shopee_api(data_ini, data_fim):
             "AppID": app_id
         }
         
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        
-        # Tenta ler como JSON, se falhar (que foi o que aconteceu), ele pega o texto exato.
+        # Executa POST ou GET dependendo da configuração do painel
+        if metodo_api == "POST":
+            r = requests.post(url_api, json=payload, headers=headers, timeout=10)
+        else:
+            # Algumas APIs da Shopee exigem GET com os dados na URL
+            r = requests.get(url_api, params=payload, headers=headers, timeout=10)
+            
         try:
             return r.json()
         except:
-            return {
-                "error": "A Shopee não retornou dados. Veja a resposta abaixo:",
-                "status_code": r.status_code,
-                "texto_real_da_shopee": r.text
-            }
+            return {"error": "A Shopee não retornou dados estruturados.", "status": r.status_code, "texto": r.text}
             
     except Exception as e:
         return {"error": "Falha no Python", "detalhe": str(e)}
@@ -80,7 +76,7 @@ def ler_csv_shopee(file):
         df = pd.read_csv(file, sep=';', encoding='latin-1')
     return df
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR (MENU COM CONFIG AVANÇADA) ---
 with st.sidebar:
     st.markdown("<h1 style='color: #ff4b4b;'>🟠 AfiliadoDash</h1>", unsafe_allow_html=True)
     st.divider()
@@ -95,9 +91,14 @@ with st.sidebar:
     arquivo_c = st.file_uploader("🖱️ Subir CSV de Cliques (P/ Conversão)", type=['csv'])
         
     st.divider()
-    data_sel = st.date_input("📅 Filtro de Período", 
-                            value=[hoje_pc - timedelta(days=7), hoje_pc], 
-                            max_value=hoje_pc)
+    data_sel = st.date_input("📅 Filtro de Período", value=[hoje_pc - timedelta(days=7), hoje_pc], max_value=hoje_pc)
+    
+    st.divider()
+    # MODO DETETIVE / DEV: Você mesmo troca a URL se a Shopee atualizar!
+    with st.expander("⚙️ Configuração Avançada da API"):
+        st.caption("Verifique a URL correta no seu painel da Shopee.")
+        api_url_input = st.text_input("URL do Endpoint", value="https://openapi.shopee.com/v2/affiliate/get_order_list")
+        api_method_input = st.selectbox("Método HTTP", ["POST", "GET"])
 
 # --- 5. PROCESSAMENTO DE DADOS ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
@@ -106,7 +107,8 @@ start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc,
 
 if modo == "API Automática":
     with st.spinner("Sincronizando com a Shopee..."):
-        dados = buscar_vendas_shopee_api(start_d, end_d)
+        # Chama a API usando a URL e o Método escolhidos na barra lateral
+        dados = buscar_vendas_shopee_api(start_d, end_d, api_url_input, api_method_input)
         
         if dados and 'data' in dados and 'order_list' in dados['data']:
             df_v_filtrado = pd.DataFrame(dados['data']['order_list'])
@@ -115,7 +117,7 @@ if modo == "API Automática":
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
-            st.error("⚠️ Erro retornado pela Shopee (Mande isso para mim):")
+            st.error(f"⚠️ Erro retornado pela URL ({api_method_input}):")
             st.json(dados) 
             
 else: 
