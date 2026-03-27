@@ -161,7 +161,7 @@ with col_filter2:
 
 st.write("") # Espaçamento
 
-# --- 6. PROCESSAMENTO DE DADOS (FILTRO RESTRITO) ---
+# --- 6. PROCESSAMENTO DE DADOS (FILTRO CORRIGIDO: LISTA NEGRA) ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
 
@@ -183,10 +183,12 @@ if modo == "API Automática":
                     })
                 df_v_filtrado = pd.DataFrame(flat_nodes)
                 
-                # FILTRO ESTRITO API: Somente status positivos
+                # NOVO FILTRO API: Remove tudo que tenha "cancel", "reject" ou "invalid" no nome.
+                # Ele converte tudo para minúsculo antes de testar para não ter erro.
                 if 'conversionStatus' in df_v_filtrado.columns:
-                    status_validos = ['Pending', 'Completed', 'Valid', 'Settled']
-                    df_v_filtrado = df_v_filtrado[df_v_filtrado['conversionStatus'].isin(status_validos)]
+                    status_limpo = df_v_filtrado['conversionStatus'].astype(str).str.lower()
+                    filtro_rejeitados = status_limpo.str.contains('cancel|reject|invalid|invalido', na=False)
+                    df_v_filtrado = df_v_filtrado[~filtro_rejeitados]
                 
                 vendas_b = df_v_filtrado['order_price'].sum()
                 pedidos_t = len(df_v_filtrado)
@@ -197,23 +199,29 @@ if modo == "API Automática":
 else: 
     if arquivo_v:
         df_v = ler_csv_shopee(arquivo_v)
-        if 'Horário do pedido' in df_v.columns:
-            df_v['Data_Simples'] = pd.to_datetime(df_v['Horário do pedido']).dt.date
+        # O CSV costuma ter nomes de colunas diferentes. Vamos achar a coluna de Horário:
+        colunas_tempo = [c for c in df_v.columns if 'horário' in c.lower() or 'tempo' in c.lower() or 'data' in c.lower()]
+        if colunas_tempo:
+            col_tempo_exata = colunas_tempo[0]
+            df_v['Data_Simples'] = pd.to_datetime(df_v[col_tempo_exata]).dt.date
             df_v_filtrado = df_v[(df_v['Data_Simples'] >= start_d) & (df_v['Data_Simples'] <= end_d)]
             
-            # FILTRO ESTRITO CSV: Remove qualquer variação de Cancelado ou Inválido.
-            if 'Status do Pedido' in df_v_filtrado.columns:
-                filtro_invalido = df_v_filtrado['Status do Pedido'].str.contains('Cancelado|Cancelada|Inválido|Invalido|Rejeitado', case=False, na=False)
-                df_v_filtrado = df_v_filtrado[~filtro_invalido]
+            # NOVO FILTRO CSV: Mesma regra, procura as palavras negativas e destrói.
+            colunas_status = [c for c in df_v_filtrado.columns if 'status' in c.lower()]
+            if colunas_status:
+                col_status_exata = colunas_status[0]
+                status_limpo_csv = df_v_filtrado[col_status_exata].astype(str).str.lower()
+                filtro_rejeitados_csv = status_limpo_csv.str.contains('cancel|reject|invalid|invalido', na=False)
+                df_v_filtrado = df_v_filtrado[~filtro_rejeitados_csv]
             
             # Garantir que a coluna de preço seja lida como número
-            col_preco = 'Preço(R$)' if 'Preço(R$)' in df_v_filtrado.columns else None
-            col_comissao = 'Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else None
+            col_preco = [c for c in df_v_filtrado.columns if 'preço' in c.lower() or 'price' in c.lower()]
+            col_comissao = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
             
             if col_preco and col_comissao:
-                vendas_b = pd.to_numeric(df_v_filtrado[col_preco], errors='coerce').sum()
+                vendas_b = pd.to_numeric(df_v_filtrado[col_preco[0]], errors='coerce').sum()
                 pedidos_t = len(df_v_filtrado)
-                comissao_t = pd.to_numeric(df_v_filtrado[col_comissao], errors='coerce').sum()
+                comissao_t = pd.to_numeric(df_v_filtrado[col_comissao[0]], errors='coerce').sum()
 
 if arquivo_c:
     df_c = ler_csv_shopee(arquivo_c)
@@ -235,14 +243,14 @@ with m1:
     <div class="nexus-card">
         <div class="card-label">Vendas Totais</div>
         <div class="card-value">R$ {vendas_b:.2f}</div>
-        <div class="card-diff" style="color: #888;">{'(Via API não retorna)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
+        <div class="card-diff" style="color: #888;">{'(API não envia BRUTO)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with m2:
     st.markdown(f"""
     <div class="nexus-card">
-        <div class="card-label">Pedidos Aprovados</div>
+        <div class="card-label">Pedidos Válidos</div>
         <div class="card-value">{pedidos_t}</div>
         <div class="card-diff">+0.0% vs anterior</div>
     </div>
@@ -262,7 +270,7 @@ with m4:
     <div class="nexus-card">
         <div class="card-label">Taxa de Conversão</div>
         <div class="card-value">{conv:.2f}%</div>
-        <div class="card-diff" style="color: #a1a1aa;">{cliques_t} cliques registrados</div>
+        <div class="card-diff" style="color: #a1a1aa;">{cliques_t} cliques na conta</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -273,20 +281,24 @@ if not df_v_filtrado.empty:
     
     with col_chart:
         st.markdown("<div class='nexus-container'>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>Receita por Dia</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Receita por Dia (Comissão)</div>", unsafe_allow_html=True)
         
         col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
-        col_comissao = 'commission' if 'commission' in df_v_filtrado.columns else 'Comissão líquida do afiliado(R$)'
-        
+        col_comissao_grafico = 'commission' if 'commission' in df_v_filtrado.columns else df_v_filtrado.columns[-1] 
+        # Busca a coluna certa de comissão no CSV para o gráfico
+        if modo != "API Automática":
+            col_csv_match = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
+            if col_csv_match: col_comissao_grafico = col_csv_match[0]
+            
         if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
             df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
         else:
             df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
             
         # Força os valores de comissão para numérico para evitar erros no gráfico
-        df_v_filtrado[col_comissao] = pd.to_numeric(df_v_filtrado[col_comissao], errors='coerce').fillna(0)
+        df_v_filtrado[col_comissao_grafico] = pd.to_numeric(df_v_filtrado[col_comissao_grafico], errors='coerce').fillna(0)
             
-        evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
+        evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao_grafico].sum().reset_index()
         evolucao.columns = ['Data', 'Comissão']
         
         fig = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#0070f3'])
@@ -322,4 +334,8 @@ if not df_v_filtrado.empty:
         st.markdown("</div>", unsafe_allow_html=True)
 
 else:
-    st.info("Aguardando carregamento de dados...")
+    # Se ainda estiver vazio mesmo sem a restrição, a gente avisa que não tem dados em vez de um spinner infinito
+    if modo == "API Automática":
+        st.warning(f"Sem pedidos válidos ou registrados na API para o período de {start_d.strftime('%d/%m')} a {end_d.strftime('%d/%m')}.")
+    else:
+        st.info("Aguardando carregamento de dados do CSV...")
