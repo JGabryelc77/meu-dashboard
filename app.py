@@ -1,6 +1,6 @@
 """
 Shopee Affiliates Dashboard - API v2 GraphQL
-Root field: partnerOrderReport (descoberto via introspection)
+Deep Schema Discovery v3 - partnerOrderReport
 """
 import streamlit as st
 import requests
@@ -26,15 +26,8 @@ BR_TZ = timezone(timedelta(hours=-3))
 MAX_PAGES = 50
 PAGE_SIZE = 100
 
-DESIRED_FIELDS = [
-    "purchaseTime",
-    "conversionStatus",
-    "netCommission",
-    "estimatedTotalCommission",
-]
-
 # ================================================================
-# CSS - DARK MODE
+# CSS
 # ================================================================
 st.markdown("""
 <style>
@@ -44,7 +37,7 @@ st.markdown("""
     font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif}
 #MainMenu,footer,header{visibility:hidden}
 [data-testid="stSidebar"]{background:#080808;border-right:1px solid #1a1a1a}
-.block-container{padding:2rem 2.5rem 3rem;max-width:1280px}
+.block-container{padding:2rem 2.5rem 3rem;max-width:1400px}
 .m-card{background:#111;border:1px solid #222;border-radius:14px;
     padding:28px 24px;transition:border-color .25s,box-shadow .25s}
 .m-card:hover{border-color:#333;box-shadow:0 0 0 1px #222}
@@ -64,6 +57,15 @@ st.markdown("""
 .disc b{color:#ccc}
 .disc .ok{color:#00d47b}
 .disc .warn{color:#f5a623}
+.disc .err{color:#ff4444}
+.phase{background:#0a0a0a;border:1px solid #1a1a1a;border-radius:12px;
+    padding:20px;margin:16px 0}
+.phase-title{font-size:14px;font-weight:700;color:#fff;margin-bottom:12px}
+.tree{font-family:monospace;font-size:12px;line-height:1.8;color:#888}
+.tree .type{color:#3b82f6}
+.tree .field{color:#e5e5e5}
+.tree .scalar{color:#666}
+.tree .nested{color:#f5a623}
 .stButton>button{background:#111!important;color:#fff!important;
     border:1px solid #333!important;border-radius:10px!important;
     font-weight:600!important;transition:all .2s!important}
@@ -77,7 +79,6 @@ div[data-baseweb="select"]>div,div[data-baseweb="input"]>div,
 ::-webkit-scrollbar-track{background:#000}
 ::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
 .empty-state{text-align:center;padding:100px 20px;color:#333}
-.empty-state .icon{font-size:52px;margin-bottom:16px}
 .empty-state .title{font-size:18px;font-weight:600;color:#555;margin-bottom:6px}
 .empty-state .desc{font-size:13px;color:#3a3a3a}
 </style>
@@ -102,7 +103,7 @@ def _sf(v):
         return 0.0
 
 # ================================================================
-# API CORE - ASSINATURA SHA256 + CHAMADA
+# API CORE
 # ================================================================
 def _sign_and_call(app_id, secret, query):
     payload = json.dumps({"query": query}, separators=(",", ":"), ensure_ascii=False)
@@ -122,154 +123,190 @@ def _sign_and_call(app_id, secret, query):
     return resp.json()
 
 # ================================================================
-# INTROSPECTION - DESCOBRE CAMPOS DO NODE
+# INTROSPECTION HELPERS
 # ================================================================
-def _resolve_type_name(t):
-    """Desembrulha NON_NULL e LIST ate o tipo base."""
+def _resolve_base(t):
+    """Desembrulha NON_NULL/LIST, retorna (name, kind, is_list)"""
     if not t:
-        return None
-    if t.get("kind") in ("NON_NULL", "LIST"):
-        return _resolve_type_name(t.get("ofType"))
-    return t.get("name")
+        return None, None, False
+    is_list = False
+    c = t
+    while c and c.get("kind") in ("NON_NULL", "LIST"):
+        if c.get("kind") == "LIST":
+            is_list = True
+        c = c.get("ofType", {})
+    if not c:
+        return None, None, is_list
+    return c.get("name"), c.get("kind"), is_list
 
-def introspect_node_fields(app_id, secret):
-    """
-    Descobre quais campos estao disponiveis dentro dos nodes
-    de partnerOrderReport.
-    Retorna: (info_dict, error_string)
-    """
-    # Passo 1: Pegar o tipo de retorno de partnerOrderReport
-    q1 = (
+# ================================================================
+# INTROSPECTION PHASE 1: ALL ROOT QUERIES
+# ================================================================
+def list_root_queries(app_id, secret):
+    q = "{__schema{queryType{fields{name}}}}"
+    try:
+        r = _sign_and_call(app_id, secret, q)
+    except Exception as e:
+        return [], str(e)
+    if "errors" in r:
+        return [], r["errors"][0].get("message", "")
+    fs = r.get("data", {}).get("__schema", {}).get("queryType", {}).get("fields", [])
+    return [f["name"] for f in fs if isinstance(f, dict)], None
+
+# ================================================================
+# INTROSPECTION PHASE 2: FIELD ARGS (required vs optional)
+# ================================================================
+def get_field_args(app_id, secret, field_name):
+    q = (
         '{__type(name:"Query"){fields{name'
-        ' type{name kind ofType{name kind ofType{name kind ofType{name kind}}}}'
+        ' args{name type{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}'
         '}}}'
     )
     try:
-        r1 = _sign_and_call(app_id, secret, q1)
-    except Exception as exc:
-        return None, "Erro introspection Query: " + str(exc)
+        r = _sign_and_call(app_id, secret, q)
+    except Exception as e:
+        return [], str(e)
+    if "errors" in r:
+        return [], r["errors"][0].get("message", "")
 
-    if "errors" in r1:
-        return None, r1["errors"][0].get("message", "")
+    for f in r.get("data", {}).get("__type", {}).get("fields", []):
+        if f.get("name") == field_name:
+            args = []
+            for a in f.get("args", []):
+                t = a.get("type", {})
+                required = t.get("kind") == "NON_NULL"
+                bname, bkind, _ = _resolve_base(t)
+                args.append({
+                    "name": a["name"],
+                    "type": bname,
+                    "required": required,
+                })
+            return args, None
+    return [], field_name + " nao encontrado"
 
-    all_fields = r1.get("data", {}).get("__type", {}).get("fields", [])
-    target = None
-    for f in all_fields:
-        if f.get("name") == "partnerOrderReport":
-            target = f
-            break
-
-    if not target:
-        return None, "partnerOrderReport nao encontrado no schema"
-
-    ret_type = _resolve_type_name(target.get("type"))
-    if not ret_type:
-        return None, "Tipo de retorno nao resolvido"
-
-    # Passo 2: Introspeccionar PartnerOrderReportConnection
-    q2 = (
-        '{__type(name:"' + ret_type + '"){fields{name'
-        ' type{name kind ofType{name kind ofType{name kind ofType{name kind}}}}'
-        '}}}'
+# ================================================================
+# INTROSPECTION PHASE 3: TYPE FIELDS (deep)
+# ================================================================
+def get_type_fields(app_id, secret, type_name):
+    q = (
+        '{__type(name:"' + type_name + '"){name kind'
+        ' fields{name type{name kind ofType{name kind ofType{name kind ofType{name kind}}}}}'
+        '}}'
     )
     try:
-        r2 = _sign_and_call(app_id, secret, q2)
-    except Exception as exc:
-        return None, "Erro introspection " + ret_type + ": " + str(exc)
+        r = _sign_and_call(app_id, secret, q)
+    except Exception as e:
+        return None, str(e)
+    if "errors" in r:
+        return None, r["errors"][0].get("message", "")
 
-    if "errors" in r2:
-        return None, r2["errors"][0].get("message", "")
+    td = r.get("data", {}).get("__type")
+    if not td:
+        return None, type_name + " nao encontrado"
 
-    conn_fields = r2.get("data", {}).get("__type", {}).get("fields", [])
-    conn_field_names = [f["name"] for f in conn_fields]
-
-    # Encontrar o campo "nodes" e seu tipo
-    nodes_f = None
-    for f in conn_fields:
-        if f.get("name") == "nodes":
-            nodes_f = f
-            break
-
-    if not nodes_f:
-        return {
-            "return_type": ret_type,
-            "connection_fields": conn_field_names,
-            "node_type": None,
-            "node_fields": [],
-        }, None
-
-    node_type_name = _resolve_type_name(nodes_f.get("type"))
-    if not node_type_name:
-        return {
-            "return_type": ret_type,
-            "connection_fields": conn_field_names,
-            "node_type": None,
-            "node_fields": [],
-        }, None
-
-    # Passo 3: Introspeccionar o tipo do node
-    q3 = (
-        '{__type(name:"' + node_type_name + '"){fields{name'
-        ' type{name kind ofType{name kind}}'
-        '}}}'
-    )
-    try:
-        r3 = _sign_and_call(app_id, secret, q3)
-    except Exception as exc:
-        return None, "Erro introspection " + node_type_name + ": " + str(exc)
-
-    if "errors" in r3:
-        return None, r3["errors"][0].get("message", "")
-
-    node_fields = r3.get("data", {}).get("__type", {}).get("fields", [])
+    fields = []
+    for f in td.get("fields", []):
+        bname, bkind, is_list = _resolve_base(f.get("type"))
+        fields.append({
+            "name": f["name"],
+            "type": bname,
+            "kind": bkind,
+            "is_list": is_list,
+            "is_scalar": bkind in ("SCALAR", "ENUM"),
+        })
 
     return {
-        "return_type": ret_type,
-        "connection_fields": conn_field_names,
-        "node_type": node_type_name,
-        "node_fields": [f["name"] for f in node_fields],
+        "name": td.get("name"),
+        "type_kind": td.get("kind"),
+        "fields": fields,
     }, None
 
 # ================================================================
-# CONSTRUCAO DA QUERY
+# DEEP INTROSPECTION: RECURSIVE
 # ================================================================
-def build_query(start_ts, end_ts, limit, fields_str, conn_extra_fields, token=None):
+def deep_introspect(app_id, secret, type_name, visited=None, max_depth=3):
     """
-    Monta a query para partnerOrderReport.
-    IMPORTANTE: searchNextToken so eh incluido quando token != None
-    (evita o erro syntax error: unexpected "")
+    Introspecciona um tipo e todos seus sub-tipos (nao escalares)
+    ate max_depth niveis. Retorna arvore completa.
     """
-    args = (
-        "purchaseTimeStart:" + str(start_ts)
-        + ",purchaseTimeEnd:" + str(end_ts)
-        + ",completeTimeStart:" + str(start_ts)
-        + ",completeTimeEnd:" + str(end_ts)
-        + ",limit:" + str(limit)
-    )
-    # SO adiciona searchNextToken se temos um token real
-    if token is not None and token != "":
-        args += ',searchNextToken:"' + str(token) + '"'
+    if visited is None:
+        visited = set()
+    if type_name in visited or max_depth <= 0:
+        return {"name": type_name, "fields": [], "note": "ja visitado ou max depth"}
+    visited.add(type_name)
 
-    # Montar campos de retorno
-    inner = "nodes{" + fields_str + "}"
-    # Adicionar searchNextToken no retorno se existir no connection type
-    if "searchNextToken" in conn_extra_fields:
-        inner += " searchNextToken"
+    info, err = get_type_fields(app_id, secret, type_name)
+    if err or not info:
+        return {"name": type_name, "fields": [], "error": err}
 
-    q = "{partnerOrderReport(" + args + "){" + inner + "}}"
-    return q
+    result = {"name": type_name, "type_kind": info.get("type_kind"), "fields": []}
+
+    for f in info["fields"]:
+        field_data = {
+            "name": f["name"],
+            "type": f["type"],
+            "kind": f["kind"],
+            "is_list": f["is_list"],
+            "is_scalar": f["is_scalar"],
+        }
+        # Se nao eh escalar, introspeccionar o sub-tipo
+        if not f["is_scalar"] and f["type"] and f["type"] not in visited:
+            sub = deep_introspect(app_id, secret, f["type"], visited, max_depth - 1)
+            field_data["sub_fields"] = sub
+        result["fields"].append(field_data)
+
+    return result
 
 # ================================================================
-# FETCH ORDERS - PAGINACAO
+# QUERY BUILDER (com campos nested)
 # ================================================================
-def fetch_orders(app_id, secret, start_ts, end_ts, fields_str, conn_extra_fields):
+def build_fields_string(tree, target_fields=None):
+    """
+    Constroi string de campos GraphQL a partir da arvore.
+    Se target_fields fornecido, filtra apenas esses campos (recursivo).
+    Se nao, inclui todos os campos escalares.
+    """
+    parts = []
+    for f in tree.get("fields", []):
+        if f.get("is_scalar"):
+            parts.append(f["name"])
+        elif "sub_fields" in f:
+            sub_str = build_fields_string(f["sub_fields"])
+            if sub_str:
+                parts.append(f["name"] + "{" + sub_str + "}")
+    return " ".join(parts)
+
+def build_query(start_ts, end_ts, limit, node_fields_str,
+                page_info_str=None, include_complete=True, token=None):
+    args = ["purchaseTimeStart:" + str(start_ts),
+            "purchaseTimeEnd:" + str(end_ts)]
+    if include_complete:
+        args.append("completeTimeStart:" + str(start_ts))
+        args.append("completeTimeEnd:" + str(end_ts))
+    args.append("limit:" + str(limit))
+    if token:
+        args.append('searchNextToken:"' + token + '"')
+
+    inner = "nodes{" + node_fields_str + "}"
+    if page_info_str:
+        inner += " searchNextPageInfo{" + page_info_str + "}"
+
+    return "{partnerOrderReport(" + ",".join(args) + "){" + inner + "}}"
+
+# ================================================================
+# FETCH ORDERS
+# ================================================================
+def fetch_orders(app_id, secret, start_ts, end_ts,
+                 node_fields_str, page_info_str,
+                 include_complete=True):
     all_nodes = []
-    token = None  # None = nao incluir na primeira chamada
+    token = None
     page = 0
     last_query = ""
 
     while page < MAX_PAGES:
-        q = build_query(start_ts, end_ts, PAGE_SIZE, fields_str, conn_extra_fields, token)
+        q = build_query(start_ts, end_ts, PAGE_SIZE, node_fields_str,
+                        page_info_str, include_complete, token)
         last_query = q
 
         try:
@@ -294,9 +331,12 @@ def fetch_orders(app_id, secret, start_ts, end_ts, fields_str, conn_extra_fields
         if not nodes:
             break
 
-        # Paginacao via searchNextToken
-        new_token = data.get("searchNextToken")
-        if new_token and str(new_token) != "" and str(new_token) != str(token):
+        # Paginacao via searchNextPageInfo
+        page_info = data.get("searchNextPageInfo", {})
+        new_token = page_info.get("searchNextToken")
+        has_next = page_info.get("hasNextPage", False)
+
+        if has_next and new_token and str(new_token) != str(token):
             token = str(new_token)
         else:
             break
@@ -306,35 +346,83 @@ def fetch_orders(app_id, secret, start_ts, end_ts, fields_str, conn_extra_fields
     return all_nodes, None, last_query
 
 # ================================================================
-# PROCESSAMENTO DE DADOS
+# PROCESSAMENTO
 # ================================================================
 def _is_blacklisted(status):
     s = (status or "").lower()
     return any(bl in s for bl in BLACKLIST)
 
-def _effective_commission(order):
+def extract_commission_from_order(order, commission_field_map):
+    """
+    Extrai comissao do pedido, buscando em items se necessario.
+    commission_field_map indica onde encontrar cada campo.
+    """
+    # Tentar campos diretos primeiro
     net = _sf(order.get("netCommission"))
+    est = _sf(order.get("estimatedTotalCommission"))
+    status = order.get("conversionStatus") or order.get("orderStatus") or "-"
+
+    # Se nao tem campos diretos, buscar em items
+    if net == 0 and est == 0 and "items" in order:
+        items = order.get("items", [])
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    # Tentar varios nomes de campo de comissao
+                    for key in ["netCommission", "commission", "commissionAmount",
+                                "affiliateCommission", "net_commission"]:
+                        v = _sf(item.get(key))
+                        if v > 0:
+                            net += v
+                            break
+                    for key in ["estimatedTotalCommission", "estimatedCommission",
+                                "estimated_commission", "estimateCommission"]:
+                        v = _sf(item.get(key))
+                        if v > 0:
+                            est += v
+                            break
+                    # Status do item
+                    if status == "-":
+                        for key in ["conversionStatus", "status", "orderStatus",
+                                    "itemStatus", "conversion_status"]:
+                            s = item.get(key)
+                            if s:
+                                status = str(s)
+                                break
+
+    # Tentar em extInfo
+    if net == 0 and est == 0 and "extInfo" in order:
+        ext = order.get("extInfo", {})
+        if isinstance(ext, dict):
+            net = _sf(ext.get("netCommission", 0))
+            est = _sf(ext.get("estimatedTotalCommission", 0))
+            if status == "-":
+                status = ext.get("conversionStatus", status)
+
     if net > 0:
-        return net, "Concluido"
-    return _sf(order.get("estimatedTotalCommission")), "Pendente"
+        return net, status, "Concluido"
+    return est, status, "Pendente"
 
 def process(raw):
     total_raw = len(raw)
     valid = []
     for o in raw:
-        if _is_blacklisted(o.get("conversionStatus", "")):
+        comm, status, ctype = extract_commission_from_order(o, {})
+
+        if _is_blacklisted(status):
             continue
-        comm, ctype = _effective_commission(o)
+
         valid.append({
             "ts": o.get("purchaseTime", 0),
-            "status": o.get("conversionStatus", "-"),
+            "status": status,
             "commission": comm,
             "type": ctype,
+            "order_id": o.get("orderId", "-"),
         })
     return valid, total_raw
 
 # ================================================================
-# UI COMPONENTS
+# UI
 # ================================================================
 def card(label, value, sub="", css=""):
     vc = "m-value " + css if css else "m-value"
@@ -348,12 +436,48 @@ def card(label, value, sub="", css=""):
     )
 
 def show_disc(label, value, status="ok"):
-    cls = "ok" if status == "ok" else "warn"
+    cls = status
     st.markdown(
         '<div class="disc"><b>' + label + ':</b> '
         + '<span class="' + cls + '">' + str(value) + "</span></div>",
         unsafe_allow_html=True,
     )
+
+def render_tree(tree, indent=0):
+    """Renderiza arvore de tipos como HTML"""
+    lines = []
+    prefix = "&nbsp;" * (indent * 4)
+    for f in tree.get("fields", []):
+        type_str = str(f.get("type", "?"))
+        if f.get("is_list"):
+            type_str = "[" + type_str + "]"
+
+        if f.get("is_scalar"):
+            lines.append(prefix + '<span class="field">' + f["name"]
+                         + '</span> <span class="scalar">: ' + type_str + '</span>')
+        else:
+            lines.append(prefix + '<span class="field">' + f["name"]
+                         + '</span> <span class="nested">: ' + type_str + '</span>')
+            if "sub_fields" in f:
+                lines.extend(render_tree_lines(f["sub_fields"], indent + 1))
+    return lines
+
+def render_tree_lines(tree, indent=0):
+    lines = []
+    prefix = "&nbsp;" * (indent * 4)
+    for f in tree.get("fields", []):
+        type_str = str(f.get("type", "?"))
+        if f.get("is_list"):
+            type_str = "[" + type_str + "]"
+        if f.get("is_scalar"):
+            lines.append(prefix + '<span class="field">' + f["name"]
+                         + '</span> <span class="scalar"> : ' + type_str + '</span>')
+        else:
+            lines.append(prefix + '<span class="field">' + f["name"]
+                         + '</span> <span class="nested"> : ' + type_str + '</span>')
+            if "sub_fields" in f:
+                lines.extend(render_tree_lines(f["sub_fields"], indent + 1))
+    return lines
 
 # ================================================================
 # SIDEBAR
@@ -370,10 +494,7 @@ with st.sidebar:
     app_id = st.text_input("App ID", value=_def_id, type="password")
     secret = st.text_input("Secret Key", value=_def_sk, type="password")
     st.markdown("---")
-    st.caption(
-        "purchaseAmount e customParameters "
-        "NAO sao solicitados (restricao de acesso)."
-    )
+    st.caption("purchaseAmount e customParameters NAO sao solicitados.")
 
 # ================================================================
 # HEADER
@@ -381,7 +502,7 @@ with st.sidebar:
 st.markdown('<div class="hdr">Shopee Affiliates</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="hdr-sub">'
-    "Dashboard de Comissoes - API v2 GraphQL - partnerOrderReport"
+    "Dashboard de Comissoes - Deep Schema Discovery v3"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -396,11 +517,9 @@ thirty_ago = today - timedelta(days=30)
 
 c_preset, c_start, c_end, c_btn = st.columns([2.2, 1.8, 1.8, 1])
 with c_preset:
-    preset = st.selectbox(
-        "Periodo",
+    preset = st.selectbox("Periodo",
         ["Ontem", "Anteontem", "Ultimos 30 dias", "Personalizado"],
-        label_visibility="collapsed",
-    )
+        label_visibility="collapsed")
 
 if preset == "Ontem":
     d_s, d_e = yesterday, yesterday
@@ -428,9 +547,8 @@ st.markdown('<hr class="sep">', unsafe_allow_html=True)
 if not go:
     st.markdown(
         '<div class="empty-state">'
-        '<div class="icon">.</div>'
         '<div class="title">Selecione um periodo e clique Consultar</div>'
-        '<div class="desc">partnerOrderReport com introspection automatica</div>'
+        '<div class="desc">Deep introspection: descobre TODA a estrutura do schema</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -448,86 +566,267 @@ start_ts = to_unix(start_date, end_of_day=False)
 end_ts = to_unix(end_date, end_of_day=True)
 
 # ================================================================
-# FASE 1: INTROSPECTION DOS CAMPOS
+# FASE 1: LISTAR TODOS OS ROOT QUERIES
 # ================================================================
-st.markdown("#### Descoberta do schema")
+st.markdown("#### Fase 1: Root Queries disponiveis")
 
-with st.spinner("Introspectando campos de partnerOrderReport..."):
-    schema_info, intro_err = introspect_node_fields(app_id, secret)
+with st.spinner("Listando todos os root queries..."):
+    all_queries, q_err = list_root_queries(app_id, secret)
 
-if intro_err:
-    st.error("Erro na introspection: " + intro_err)
-    st.info("Tentando com campos padrao...")
-    schema_info = None
-
-if schema_info:
-    show_disc("Tipo retorno", schema_info.get("return_type", "?"))
-    show_disc("Campos connection", ", ".join(schema_info.get("connection_fields", [])))
-    show_disc("Tipo node", str(schema_info.get("node_type", "?")))
-
-    available = schema_info.get("node_fields", [])
-    if available:
-        show_disc("Campos node (" + str(len(available)) + ")", ", ".join(available))
-
-        # Validar quais dos nossos campos desejados existem
-        valid_fields = [f for f in DESIRED_FIELDS if f in available]
-        missing = [f for f in DESIRED_FIELDS if f not in available]
-
-        if missing:
-            show_disc("Campos indisponiveis", ", ".join(missing), status="warn")
-
-        if not valid_fields:
-            # Nenhum campo desejado existe - usar todos os disponiveis
-            st.warning("Nenhum campo desejado encontrado. Usando todos os campos disponiveis.")
-            valid_fields = available
-
-        fields_str = " ".join(valid_fields)
-    else:
-        st.warning("Nao foi possivel descobrir campos do node. Usando padrao.")
-        fields_str = " ".join(DESIRED_FIELDS)
-
-    conn_extra = schema_info.get("connection_fields", [])
+if q_err:
+    st.error("Erro: " + q_err)
 else:
-    fields_str = " ".join(DESIRED_FIELDS)
-    conn_extra = ["searchNextToken"]
+    show_disc("Total de queries", str(len(all_queries)))
+    # Destacar queries relacionadas a order/commission
+    order_related = [q for q in all_queries if any(
+        kw in q.lower() for kw in ["order", "commission", "report", "affiliate", "partner"]
+    )]
+    other = [q for q in all_queries if q not in order_related]
 
-show_disc("Campos solicitados", fields_str)
-
-# Preview da query
-preview_q = build_query(start_ts, end_ts, 1, fields_str, conn_extra, None)
-with st.expander("Preview da query (primeira pagina)"):
-    st.code(preview_q, language="graphql")
+    if order_related:
+        show_disc("Queries relacionadas", ", ".join(order_related))
+    if other:
+        show_disc("Outras queries", ", ".join(other))
 
 st.markdown('<hr class="sep">', unsafe_allow_html=True)
 
 # ================================================================
-# FASE 2: BUSCAR PEDIDOS
+# FASE 2: ARGUMENTOS DE partnerOrderReport
 # ================================================================
-with st.spinner("Buscando pedidos..."):
-    raw_orders, fetch_err, last_query = fetch_orders(
-        app_id, secret, start_ts, end_ts, fields_str, conn_extra
+st.markdown("#### Fase 2: Argumentos de partnerOrderReport")
+
+with st.spinner("Introspectando argumentos..."):
+    field_args, args_err = get_field_args(app_id, secret, "partnerOrderReport")
+
+if args_err:
+    st.error("Erro: " + args_err)
+    field_args = []
+
+required_args = [a for a in field_args if a.get("required")]
+optional_args = [a for a in field_args if not a.get("required")]
+
+if required_args:
+    show_disc("Obrigatorios",
+              ", ".join(a["name"] + ":" + str(a["type"]) for a in required_args))
+if optional_args:
+    show_disc("Opcionais",
+              ", ".join(a["name"] + ":" + str(a["type"]) for a in optional_args),
+              status="warn")
+
+st.markdown('<hr class="sep">', unsafe_allow_html=True)
+
+# ================================================================
+# FASE 3: DEEP INTROSPECTION - TODA A ARVORE
+# ================================================================
+st.markdown("#### Fase 3: Estrutura completa de PartnerOrder")
+
+with st.spinner("Deep introspection de PartnerOrder e sub-tipos..."):
+    node_tree = deep_introspect(app_id, secret, "PartnerOrder", max_depth=3)
+
+# Renderizar arvore
+tree_lines = render_tree_lines(node_tree)
+if tree_lines:
+    st.markdown(
+        '<div class="tree">' + "<br>".join(tree_lines) + "</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.warning("Nao foi possivel introspeccionar PartnerOrder")
+
+# Introspeccionar searchNextPageInfo
+st.markdown("##### searchNextPageInfo")
+with st.spinner("Introspectando searchNextPageInfo..."):
+    page_info_tree = deep_introspect(app_id, secret, "SearchNextPageInfo", max_depth=1)
+    if not page_info_tree.get("fields"):
+        # Tentar outros nomes
+        for name in ["PartnerOrderReportPageInfo", "PageInfo", "SearchPageInfo"]:
+            page_info_tree = deep_introspect(app_id, secret, name, max_depth=1)
+            if page_info_tree.get("fields"):
+                break
+
+pi_lines = render_tree_lines(page_info_tree)
+if pi_lines:
+    st.markdown(
+        '<div class="tree">' + "<br>".join(pi_lines) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+# Descobrir campos do searchNextPageInfo
+page_info_fields = [f["name"] for f in page_info_tree.get("fields", []) if f.get("is_scalar")]
+page_info_str = " ".join(page_info_fields) if page_info_fields else "searchNextToken hasNextPage"
+show_disc("Campos PageInfo", page_info_str)
+
+st.markdown('<hr class="sep">', unsafe_allow_html=True)
+
+# ================================================================
+# FASE 4: CONSTRUIR QUERY COM CAMPOS COMPLETOS
+# ================================================================
+st.markdown("#### Fase 4: Construcao da Query")
+
+# Construir string de campos do node automaticamente
+node_fields_str = build_fields_string(node_tree)
+show_disc("Campos auto-gerados", node_fields_str if node_fields_str else "VAZIO")
+
+if not node_fields_str:
+    # Fallback manual
+    node_fields_str = "orderId purchaseTime orderStatus"
+    show_disc("Usando fallback", node_fields_str, status="warn")
+
+# Determinar se completeTime eh obrigatorio
+required_names = [a["name"] for a in required_args]
+include_complete = "completeTimeStart" in required_names
+
+show_disc("Incluir completeTime", str(include_complete))
+
+# Preview de 3 variantes da query
+st.markdown("##### Variantes da query para testar:")
+
+queries_to_try = []
+
+# Variante 1: Todos os campos, com completeTime
+q1 = build_query(start_ts, end_ts, 1, node_fields_str, page_info_str, True, None)
+queries_to_try.append(("Completa (com completeTime)", q1, True))
+
+# Variante 2: Todos os campos, SEM completeTime
+q2 = build_query(start_ts, end_ts, 1, node_fields_str, page_info_str, False, None)
+queries_to_try.append(("Sem completeTime", q2, False))
+
+# Variante 3: Campos minimos
+q3_fields = "orderId purchaseTime orderStatus"
+q3 = build_query(start_ts, end_ts, 1, q3_fields, page_info_str, True, None)
+queries_to_try.append(("Campos minimos", q3, True))
+
+for label, q, _ in queries_to_try:
+    with st.expander("Query: " + label):
+        st.code(q, language="graphql")
+
+st.markdown('<hr class="sep">', unsafe_allow_html=True)
+
+# ================================================================
+# FASE 5: TENTAR CADA VARIANTE
+# ================================================================
+st.markdown("#### Fase 5: Testando queries")
+
+success_query = None
+success_result = None
+success_include_complete = True
+success_fields_str = node_fields_str
+all_errors = []
+
+for label, q, inc_complete in queries_to_try:
+    with st.spinner("Testando: " + label + "..."):
+        try:
+            result = _sign_and_call(app_id, secret, q)
+        except Exception as exc:
+            all_errors.append(label + ": " + str(exc))
+            show_disc(label, "ERRO: " + str(exc), status="err")
+            continue
+
+        if "errors" in result:
+            msg = result["errors"][0].get("message", str(result["errors"]))
+            all_errors.append(label + ": " + msg)
+            show_disc(label, msg, status="err")
+        else:
+            show_disc(label, "SUCESSO!", status="ok")
+            success_query = q
+            success_result = result
+            success_include_complete = inc_complete
+            if "minimos" in label:
+                success_fields_str = "orderId purchaseTime orderStatus"
+            break
+
+# Tentar tambem CADA root query alternativa se tudo falhou
+if not success_result and all_queries:
+    st.markdown("##### Tentando queries alternativas...")
+    for rq in all_queries:
+        if rq == "partnerOrderReport":
+            continue
+        # Tentar uma query simples
+        test_q = "{" + rq + "{__typename}}"
+        with st.spinner("Testando " + rq + "..."):
+            try:
+                r = _sign_and_call(app_id, secret, test_q)
+                if "errors" not in r:
+                    show_disc(rq, "Acessivel!", status="ok")
+                else:
+                    msg = r["errors"][0].get("message", "")[:80]
+                    show_disc(rq, msg, status="warn")
+            except Exception:
+                show_disc(rq, "erro", status="err")
+
+st.markdown('<hr class="sep">', unsafe_allow_html=True)
+
+# ================================================================
+# FASE 6: BUSCAR DADOS (se alguma query funcionou)
+# ================================================================
+if not success_result:
+    st.error("Nenhuma query funcionou. Erros encontrados:")
+    for e in all_errors:
+        st.code(e)
+
+    st.markdown("---")
+    st.markdown("### Proximos passos")
+    st.markdown("""
+**O erro `[10031]: access deny` significa que seu App nao tem permissao para `partnerOrderReport`.**
+
+**Para resolver:**
+
+1. Acesse [Shopee Open Platform](https://open.shopee.com.br/)
+2. Va em **App Management** > seu app
+3. Procure por permissoes como:
+   - **Partner Order Report**
+   - **Affiliate Order Report**
+   - **Order Data Access**
+4. Ative a permissao necessaria
+5. Aguarde aprovacao (pode levar ate 24h)
+
+**Queries disponiveis no seu schema:**
+""")
+    for q in all_queries:
+        st.code(q)
+
+    with st.expander("Schema completo descoberto"):
+        st.json({
+            "root_queries": all_queries,
+            "partnerOrderReport_args": field_args,
+            "required_args": [a["name"] for a in required_args],
+            "optional_args": [a["name"] for a in optional_args],
+            "node_type": "PartnerOrder",
+            "node_tree": json.loads(json.dumps(node_tree, default=str)),
+            "page_info_fields": page_info_fields,
+            "queries_tried": [{"label": l, "query": q} for l, q, _ in queries_to_try],
+            "errors": all_errors,
+        })
+    st.stop()
+
+# Se chegou aqui, temos dados!
+st.markdown("#### Fase 6: Buscando todos os pedidos")
+
+with st.spinner("Buscando pedidos com paginacao..."):
+    raw_orders, fetch_err, last_q = fetch_orders(
+        app_id, secret, start_ts, end_ts,
+        success_fields_str, page_info_str,
+        success_include_complete
     )
 
 if fetch_err:
     st.error(fetch_err)
     with st.expander("Debug"):
-        st.code("Ultima query:\n" + last_query, language="graphql")
-        st.json({
-            "endpoint": ENDPOINT,
-            "start_ts": start_ts,
-            "end_ts": end_ts,
-            "fields_requested": fields_str,
-            "schema_info": schema_info,
-        })
+        st.code("Ultima query:\n" + last_q, language="graphql")
     st.stop()
 
 # ================================================================
-# FASE 3: PROCESSAR E EXIBIR
+# FASE 7: PROCESSAR E EXIBIR
 # ================================================================
 valid_orders, total_raw = process(raw_orders)
 total_valid = len(valid_orders)
 total_comm = sum(o["commission"] for o in valid_orders)
 conv_rate = (total_valid / total_raw * 100) if total_raw > 0 else 0.0
+
+# Mostrar amostra dos dados brutos
+if raw_orders:
+    with st.expander("Amostra dados brutos (" + str(len(raw_orders)) + " pedidos)"):
+        st.json(raw_orders[:3])
 
 # 4 METRICAS
 k1, k2, k3, k4 = st.columns(4, gap="medium")
@@ -556,10 +855,10 @@ if valid_orders:
     b1, b2 = st.columns(2, gap="medium")
     with b1:
         card("COMISSAO CONCLUIDA", brl(c_done),
-             str(q_done) + " pedido(s) - netCommission > 0", css="green")
+             str(q_done) + " pedido(s)", css="green")
     with b2:
         card("COMISSAO PENDENTE", brl(c_pend),
-             str(q_pend) + " pedido(s) - estimatedTotalCommission", css="yellow")
+             str(q_pend) + " pedido(s)", css="yellow")
 
     # TABELA
     st.markdown('<hr class="sep">', unsafe_allow_html=True)
@@ -575,11 +874,12 @@ if valid_orders:
 
     df = pd.DataFrame(valid_orders)
     df["Data/Hora"] = df["ts"].apply(_fmt_ts)
+    df["Pedido"] = df["order_id"]
     df["Status"] = df["status"]
     df["Tipo"] = df["type"]
     df["Comissao"] = df["commission"].apply(brl)
     display = (
-        df[["Data/Hora", "Status", "Tipo", "Comissao"]]
+        df[["Data/Hora", "Pedido", "Status", "Tipo", "Comissao"]]
         .sort_values("Data/Hora", ascending=False)
         .reset_index(drop=True)
     )
@@ -587,23 +887,24 @@ if valid_orders:
                  height=min(520, 36 * len(display) + 40))
 else:
     st.markdown('<hr class="sep">', unsafe_allow_html=True)
-    st.info(
-        "Nenhum pedido valido: "
-        + start_date.strftime("%d/%m/%Y") + " - "
-        + end_date.strftime("%d/%m/%Y")
-    )
+    st.info("Nenhum pedido valido: "
+            + start_date.strftime("%d/%m/%Y") + " - "
+            + end_date.strftime("%d/%m/%Y"))
 
-# RODAPE DEBUG
+# RODAPE DEBUG COMPLETO
 with st.expander("Debug completo"):
     st.json({
         "endpoint": ENDPOINT,
-        "root_field": "partnerOrderReport",
-        "args": "purchaseTimeStart, purchaseTimeEnd, completeTimeStart, completeTimeEnd, limit, searchNextToken",
-        "fields_requested": fields_str,
-        "schema_info": schema_info,
+        "root_queries_available": all_queries,
+        "field_args": field_args,
+        "required_args": [a["name"] for a in required_args],
+        "node_fields_auto": node_fields_str,
+        "page_info_fields": page_info_str,
+        "include_complete_time": success_include_complete,
         "start_ts": start_ts,
         "end_ts": end_ts,
         "total_raw": total_raw,
         "total_valid": total_valid,
-        "last_query": last_query if last_query else preview_q,
+        "last_query": last_q if last_q else str(queries_to_try[0][1] if queries_to_try else ""),
+        "schema_tree": json.loads(json.dumps(node_tree, default=str)),
     })
