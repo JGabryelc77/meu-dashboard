@@ -27,8 +27,8 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (DINÂMICA E BLINDADA) ---
-def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
+# --- 2. FUNÇÃO API SHOPEE (NOVO PADRÃO GRAPHQL OFICIAL BRASIL) ---
+def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
     if not url_api or url_api == "":
         return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
         
@@ -37,27 +37,42 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
         secret = st.secrets["SHOPEE_SECRET"]
         timestamp = int(time.time())
         
-        payload = {
-            "start_time": int(time.mktime(data_ini.timetuple())),
-            "end_time": int(time.mktime(data_fim.timetuple())),
-            "limit": 100
-        }
+        # Converte datas para Timestamp Unix (exigência do conversionReport)
+        start_ts = int(time.mktime(data_ini.timetuple()))
+        end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
+        # A query GraphQL extraída da documentação
+        graphql_query = f"""
+        {{
+          conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
+            nodes {{
+              orderNo
+              purchaseTime
+              orderStatus
+              purchaseAmount
+              estimatedCommission
+              subId1
+            }}
+          }}
+        }}
+        """
+        
+        # Monta o Payload e transforma em String JSON sem espaços
+        payload = {"query": graphql_query.strip()}
         payload_str = json.dumps(payload, separators=(',', ':'))
+        
+        # Calcula a Assinatura (Credential + Timestamp + Payload + Secret)
         base_string = f"{app_id}{timestamp}{payload_str}{secret}"
         signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
         
+        # O cabeçalho exato exigido pela documentação que você me mandou
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"SHA256 {signature}",
-            "Timestamp": str(timestamp),
-            "AppID": app_id
+            "Authorization": f"SHA256 Credential={app_id}, Timestamp={timestamp}, Signature={signature}"
         }
         
-        if metodo_api == "POST":
-            r = requests.post(url_api, json=payload, headers=headers, timeout=10)
-        else:
-            r = requests.get(url_api, params=payload, headers=headers, timeout=10)
+        # Faz a requisição POST (O endpoint do GraphQL é sempre POST)
+        r = requests.post(url_api, data=payload_str, headers=headers, timeout=10)
             
         try:
             return r.json()
@@ -96,9 +111,8 @@ with st.sidebar:
     
     st.divider()
     with st.expander("⚙️ Configuração da API", expanded=True):
-        st.caption("Verifique a URL correta no seu painel da Shopee.")
+        st.caption("Endpoint extraído da sua documentação:")
         api_url_input = st.text_input("URL do Endpoint", value="https://open-api.affiliate.shopee.com.br/graphql")
-        api_method_input = st.selectbox("Método HTTP", ["POST", "GET"])
 
 # --- 5. PROCESSAMENTO DE DADOS ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
@@ -106,17 +120,27 @@ df_v_filtrado = pd.DataFrame()
 start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
 
 if modo == "API Automática":
-    with st.spinner("Conectando aos servidores da Shopee..."):
-        dados = buscar_vendas_shopee_api(start_d, end_d, api_url_input, api_method_input)
+    with st.spinner("Conectando aos servidores GraphQL da Shopee..."):
+        dados = buscar_vendas_shopee_api(start_d, end_d, api_url_input)
         
-        if dados and 'data' in dados and 'order_list' in dados['data']:
-            df_v_filtrado = pd.DataFrame(dados['data']['order_list'])
-            if not df_v_filtrado.empty:
-                vendas_b = df_v_filtrado['order_price'].sum()
+        # Novo caminho de leitura para o padrão GraphQL (conversionReport -> nodes)
+        if dados and 'data' in dados and 'conversionReport' in dados['data']:
+            nodes = dados['data']['conversionReport']['nodes']
+            if nodes:
+                df_v_filtrado = pd.DataFrame(nodes)
+                # Filtra apenas pedidos não cancelados (ajuste fino caso a API retorne tudo)
+                if 'orderStatus' in df_v_filtrado.columns:
+                    df_v_filtrado = df_v_filtrado[df_v_filtrado['orderStatus'] != 'Cancelled']
+                
+                # Mapeamento dinâmico das colunas da API
+                col_preco = 'purchaseAmount' if 'purchaseAmount' in df_v_filtrado.columns else 'order_price'
+                col_comissao = 'estimatedCommission' if 'estimatedCommission' in df_v_filtrado.columns else 'commission'
+                
+                vendas_b = df_v_filtrado[col_preco].sum()
                 pedidos_t = len(df_v_filtrado)
-                comissao_t = df_v_filtrado['commission'].sum()
+                comissao_t = df_v_filtrado[col_comissao].sum()
         else:
-            st.error(f"⚠️ Resposta do Servidor ({api_method_input}):")
+            st.error(f"⚠️ Resposta do Servidor:")
             st.json(dados) 
             
 else: 
@@ -158,11 +182,14 @@ st.divider()
 
 if not df_v_filtrado.empty:
     c1, c2 = st.columns([2, 1])
+    
+    # Identifica os nomes das colunas de forma dinâmica (API vs CSV)
+    col_sub = 'subId1' if 'subId1' in df_v_filtrado.columns else ('Sub_id1' if 'Sub_id1' in df_v_filtrado.columns else df_v_filtrado.columns[0])
+    col_comissao = 'estimatedCommission' if 'estimatedCommission' in df_v_filtrado.columns else ('Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else 'commission')
+    col_canal = 'source' if 'source' in df_v_filtrado.columns else ('Canal' if 'Canal' in df_v_filtrado.columns else None)
+    
     with c1:
         st.subheader("📊 Análise Unificada (SubID)")
-        col_sub = 'Sub_id1' if 'Sub_id1' in df_v_filtrado.columns else ('sub_id' if 'sub_id' in df_v_filtrado.columns else df_v_filtrado.columns[0])
-        col_comissao = 'Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else 'commission'
-        
         tab = df_v_filtrado.groupby(col_sub).agg(
             Pedidos=(col_sub, 'count'),
             Comissao=(col_comissao, 'sum')
@@ -172,14 +199,16 @@ if not df_v_filtrado.empty:
         
     with c2:
         st.subheader("🎯 Vendas por Canal")
-        col_canal = 'Canal' if 'Canal' in df_v_filtrado.columns else ('source' if 'source' in df_v_filtrado.columns else None)
         if col_canal:
             fig = px.pie(df_v_filtrado, names=col_canal, values=col_comissao, hole=0.6, template="plotly_dark", color_discrete_sequence=['#ff4b4b', '#ff6d00', '#00c853'])
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300)
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("A API não retornou dados de canal para este período.")
 
     st.subheader("📈 Evolução da Comissão (Montanha)")
-    col_data_evolucao = 'Data_Simples' if 'Data_Simples' in df_v_filtrado.columns else 'create_time'
+    col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
+    
     if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
         df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
     else:
