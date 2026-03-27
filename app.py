@@ -4,10 +4,11 @@ import plotly.express as px
 import hashlib
 import time
 import requests
+import json
 from datetime import date, timedelta
 
 # --- 1. SETUP DE DESIGN PREMIUM ---
-st.set_page_config(page_title="AfiliadoDash PRO | API Live", layout="wide")
+st.set_page_config(page_title="AfiliadoDash PRO | API Live", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -26,38 +27,44 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (USANDO SUAS CHAVES) ---
+# --- 2. FUNÇÃO API SHOPEE (COM ASSINATURA CORRIGIDA) ---
 def buscar_vendas_shopee_api(data_ini, data_fim):
     try:
-        # Puxando as suas chaves com segurança
+        # Puxa as chaves cadastradas no Secrets do Streamlit
         app_id = st.secrets["SHOPEE_APP_ID"]
         secret = st.secrets["SHOPEE_SECRET"]
         timestamp = int(time.time())
         
-        # Gerando a assinatura oficial da Shopee
-        base_string = f"{app_id}{timestamp}{secret}"
-        signature = hashlib.sha256(base_string.encode()).hexdigest()
+        url = "https://open.shopee.com.br/api/v2/affiliate/get_order_list"
         
-        # URL da Open API
-        url = "https://open.shopee.com.br/api/v2/affiliate/get_order_list" # Ajuste para partner.shopeemobile.com se necessário
-        
+        # 1. Monta o pedido de datas
         payload = {
             "start_time": int(time.mktime(data_ini.timetuple())),
             "end_time": int(time.mktime(data_fim.timetuple())),
             "limit": 100
         }
+        
+        # 2. Converte o pedido para string sem espaços (Exigência Shopee)
+        payload_str = json.dumps(payload, separators=(',', ':'))
+        
+        # 3. Gera a assinatura misturando AppID + Timestamp + Payload + Secret
+        base_string = f"{app_id}{timestamp}{payload_str}{secret}"
+        signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"SHA256 {signature}",
             "Timestamp": str(timestamp),
             "AppID": app_id
         }
+        
         r = requests.post(url, json=payload, headers=headers, timeout=10)
         return r.json()
+        
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": "Falha no Python", "detalhe": str(e)}
 
-# --- 3. FUNÇÃO LEITURA DE CSV (PARA OS CLIQUES OU BACKUP) ---
+# --- 3. FUNÇÃO LEITURA DE CSV (BACKUP E CLIQUES) ---
 def ler_csv_shopee(file):
     if file is None: return pd.DataFrame()
     try:
@@ -79,7 +86,7 @@ with st.sidebar:
         arquivo_v = st.file_uploader("📥 Subir CSV de Vendas", type=['csv'])
         
     st.markdown("---")
-    arquivo_c = st.file_uploader("🖱️ Subir CSV de Cliques (Para Conversão)", type=['csv'])
+    arquivo_c = st.file_uploader("🖱️ Subir CSV de Cliques (P/ Conversão)", type=['csv'])
         
     st.divider()
     data_sel = st.date_input("📅 Filtro de Período", 
@@ -91,10 +98,12 @@ vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
 start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
 
-# Lógica de Vendas (API ou CSV)
+# Lógica de Vendas
 if modo == "API Automática":
     with st.spinner("Sincronizando com a Shopee..."):
         dados = buscar_vendas_shopee_api(start_d, end_d)
+        
+        # Modo Detetive: Se der sucesso, processa. Se der erro, mostra na tela.
         if dados and 'data' in dados and 'order_list' in dados['data']:
             df_v_filtrado = pd.DataFrame(dados['data']['order_list'])
             if not df_v_filtrado.empty:
@@ -102,8 +111,10 @@ if modo == "API Automática":
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
-            st.error("Falha na API. Verifique se o AppID tem permissão 'Live' ou use o CSV (Backup).")
-else:
+            st.error("⚠️ A API retornou um erro. Copie o texto abaixo e me mande:")
+            st.json(dados) # Isso mostra o erro real para arrumarmos
+            
+else: # Modo CSV
     if arquivo_v:
         df_v = ler_csv_shopee(arquivo_v)
         if 'Horário do pedido' in df_v.columns:
@@ -114,14 +125,13 @@ else:
             pedidos_t = len(validos)
             comissao_t = validos['Comissão líquida do afiliado(R$)'].sum()
 
-# Lógica de Cliques (Sempre via CSV)
+# Lógica de Cliques (Sempre CSV)
 if arquivo_c:
     df_c = ler_csv_shopee(arquivo_c)
     colunas_data_c = [c for c in df_c.columns if 'Data' in c or 'Date' in c or 'Tempo' in c or 'Horário' in c]
     if colunas_data_c:
         df_c['Data_Simples'] = pd.to_datetime(df_c[colunas_data_c[0]]).dt.date
         df_c_filtrado = df_c[(df_c['Data_Simples'] >= start_d) & (df_c['Data_Simples'] <= end_d)]
-        
         col_cliques = [c for c in df_c.columns if 'Clique' in c or 'Clicks' in c or 'Qtd' in c]
         cliques_t = df_c_filtrado[col_cliques[0]].sum() if col_cliques else len(df_c_filtrado)
 
@@ -133,7 +143,7 @@ conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
 st.title("Dashboard de Visão Geral")
 st.caption(f"Período: {start_d.strftime('%d/%m/%Y')} até {end_d.strftime('%d/%m/%Y')}")
 
-# LINHA 1: OS 6 CARDS
+# LINHA 1: METRICAS
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Vendas Totais", f"R$ {vendas_b:.2f}")
 m2.metric("Pedidos", pedidos_t)
@@ -144,11 +154,11 @@ m6.metric("Conversão", f"{conv:.2f}%")
 
 st.divider()
 
+# LINHA 2: TABELA E GRÁFICO
 if not df_v_filtrado.empty:
     c1, c2 = st.columns([2, 1])
     with c1:
         st.subheader("📊 Análise Unificada (SubID)")
-        # Lida com o nome da coluna vindo da API vs CSV
         col_sub = 'Sub_id1' if 'Sub_id1' in df_v_filtrado.columns else ('sub_id' if 'sub_id' in df_v_filtrado.columns else df_v_filtrado.columns[0])
         col_comissao = 'Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else 'commission'
         
@@ -168,10 +178,14 @@ if not df_v_filtrado.empty:
             st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("📈 Evolução da Comissão (Montanha)")
-    # Identifica a coluna de data (CSV ou API)
     col_data_evolucao = 'Data_Simples' if 'Data_Simples' in df_v_filtrado.columns else 'create_time'
-    
-    evolucao = df_v_filtrado.groupby(col_data_evolucao)[col_comissao].sum().reset_index()
+    # Se a API retornar unix timestamp (números), converte para data
+    if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
+        df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
+    else:
+        df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
+        
+    evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
     evolucao.columns = ['Data', 'Comissão']
     
     fig_a = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#00c853'], markers=True)
@@ -179,4 +193,4 @@ if not df_v_filtrado.empty:
     fig_a.update_layout(yaxis_title="Comissão (R$)", xaxis_title="Dia", height=400)
     st.plotly_chart(fig_a, use_container_width=True)
 else:
-    st.info("Aguardando carregamento de dados (API ou CSV)...")
+    st.info("Aguardando os dados da API ou do arquivo CSV.")
