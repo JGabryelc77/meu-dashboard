@@ -27,27 +27,24 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (COM ASSINATURA CORRIGIDA) ---
+# --- 2. FUNÇÃO API SHOPEE (COM CAPTURA DO TEXTO REAL DA SHOPEE) ---
 def buscar_vendas_shopee_api(data_ini, data_fim):
     try:
-        # Puxa as chaves cadastradas no Secrets do Streamlit
         app_id = st.secrets["SHOPEE_APP_ID"]
         secret = st.secrets["SHOPEE_SECRET"]
         timestamp = int(time.time())
         
-        url = "https://open.shopee.com.br/api/v2/affiliate/get_order_list"
+        # Testando a rota padrão da Shopee Open Platform
+        url = "https://partner.shopeemobile.com/api/v2/affiliate/get_order_list"
         
-        # 1. Monta o pedido de datas
         payload = {
             "start_time": int(time.mktime(data_ini.timetuple())),
             "end_time": int(time.mktime(data_fim.timetuple())),
             "limit": 100
         }
         
-        # 2. Converte o pedido para string sem espaços (Exigência Shopee)
         payload_str = json.dumps(payload, separators=(',', ':'))
         
-        # 3. Gera a assinatura misturando AppID + Timestamp + Payload + Secret
         base_string = f"{app_id}{timestamp}{payload_str}{secret}"
         signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
         
@@ -59,12 +56,21 @@ def buscar_vendas_shopee_api(data_ini, data_fim):
         }
         
         r = requests.post(url, json=payload, headers=headers, timeout=10)
-        return r.json()
         
+        # Tenta ler como JSON, se falhar (que foi o que aconteceu), ele pega o texto exato.
+        try:
+            return r.json()
+        except:
+            return {
+                "error": "A Shopee não retornou dados. Veja a resposta abaixo:",
+                "status_code": r.status_code,
+                "texto_real_da_shopee": r.text
+            }
+            
     except Exception as e:
         return {"error": "Falha no Python", "detalhe": str(e)}
 
-# --- 3. FUNÇÃO LEITURA DE CSV (BACKUP E CLIQUES) ---
+# --- 3. FUNÇÃO LEITURA DE CSV ---
 def ler_csv_shopee(file):
     if file is None: return pd.DataFrame()
     try:
@@ -98,12 +104,10 @@ vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
 start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
 
-# Lógica de Vendas
 if modo == "API Automática":
     with st.spinner("Sincronizando com a Shopee..."):
         dados = buscar_vendas_shopee_api(start_d, end_d)
         
-        # Modo Detetive: Se der sucesso, processa. Se der erro, mostra na tela.
         if dados and 'data' in dados and 'order_list' in dados['data']:
             df_v_filtrado = pd.DataFrame(dados['data']['order_list'])
             if not df_v_filtrado.empty:
@@ -111,10 +115,10 @@ if modo == "API Automática":
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
-            st.error("⚠️ A API retornou um erro. Copie o texto abaixo e me mande:")
-            st.json(dados) # Isso mostra o erro real para arrumarmos
+            st.error("⚠️ Erro retornado pela Shopee (Mande isso para mim):")
+            st.json(dados) 
             
-else: # Modo CSV
+else: 
     if arquivo_v:
         df_v = ler_csv_shopee(arquivo_v)
         if 'Horário do pedido' in df_v.columns:
@@ -125,7 +129,6 @@ else: # Modo CSV
             pedidos_t = len(validos)
             comissao_t = validos['Comissão líquida do afiliado(R$)'].sum()
 
-# Lógica de Cliques (Sempre CSV)
 if arquivo_c:
     df_c = ler_csv_shopee(arquivo_c)
     colunas_data_c = [c for c in df_c.columns if 'Data' in c or 'Date' in c or 'Tempo' in c or 'Horário' in c]
@@ -135,7 +138,6 @@ if arquivo_c:
         col_cliques = [c for c in df_c.columns if 'Clique' in c or 'Clicks' in c or 'Qtd' in c]
         cliques_t = df_c_filtrado[col_cliques[0]].sum() if col_cliques else len(df_c_filtrado)
 
-# Cálculos Finais
 ticket = vendas_b / pedidos_t if pedidos_t > 0 else 0
 conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
 
@@ -143,7 +145,6 @@ conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
 st.title("Dashboard de Visão Geral")
 st.caption(f"Período: {start_d.strftime('%d/%m/%Y')} até {end_d.strftime('%d/%m/%Y')}")
 
-# LINHA 1: METRICAS
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Vendas Totais", f"R$ {vendas_b:.2f}")
 m2.metric("Pedidos", pedidos_t)
@@ -154,7 +155,6 @@ m6.metric("Conversão", f"{conv:.2f}%")
 
 st.divider()
 
-# LINHA 2: TABELA E GRÁFICO
 if not df_v_filtrado.empty:
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -179,7 +179,6 @@ if not df_v_filtrado.empty:
 
     st.subheader("📈 Evolução da Comissão (Montanha)")
     col_data_evolucao = 'Data_Simples' if 'Data_Simples' in df_v_filtrado.columns else 'create_time'
-    # Se a API retornar unix timestamp (números), converte para data
     if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
         df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
     else:
