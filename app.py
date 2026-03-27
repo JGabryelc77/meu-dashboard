@@ -1,356 +1,599 @@
+"""
+┌──────────────────────────────────────────────────────────────────┐
+│  SHOPEE AFFILIATES DASHBOARD — API v2 (GraphQL)                 │
+│  Stack: Python · Streamlit · Requests                           │
+│  Endpoint: open-api.affiliate.shopee.com.br/graphql             │
+│  Campos: purchaseTime · conversionStatus                        │
+│          netCommission · estimatedTotalCommission                │
+│  NÃO solicita: purchaseAmount · customParameters                │
+└──────────────────────────────────────────────────────────────────┘
+"""
+
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import hashlib
-import time
 import requests
+import hashlib
 import json
-from datetime import date, timedelta
-from dateutil.relativedelta import relativedelta
+import time
+from datetime import datetime, timedelta, timezone, date
+import pandas as pd
 
-# --- 1. SETUP DA PÁGINA ---
-st.set_page_config(page_title="Nexus Analytics | Shopee", layout="wide", initial_sidebar_state="expanded")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PAGE CONFIG
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+st.set_page_config(
+    page_title="Shopee Affiliates",
+    page_icon="🛍️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-# --- CSS COMPLETAMENTE NOVO (ESTILO VERCEL / MINIMALISTA HIGH-TECH) ---
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CONSTANTES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENDPOINT = "https://open-api.affiliate.shopee.com.br/graphql"
+BLACKLIST = ("cancel", "reject", "invalid")
+BR_TZ = timezone(timedelta(hours=-3))
+MAX_PAGES = 50          # trava de segurança na paginação
+PAGE_SIZE = 100
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# DARK-MODE CSS  (fundo #000, cards #111, estilo Vercel/Apple)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 st.markdown("""
 <style>
-    /* Reset e Fundos */
-    .stApp, .main { background-color: #000000 !important; }
-    h1, h2, h3, h4 { color: #ededed !important; font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: -0.05em; }
-    
-    /* Esconder elementos nativos */
-    header, #MainMenu { visibility: hidden; }
-    
-    /* Sidebar */
-    [data-testid="stSidebar"] { background-color: #0a0a0a !important; border-right: 1px solid #333333; }
-    [data-testid="stSidebar"] * { color: #a1a1aa !important; }
-    hr { border-color: #333333 !important; }
-    
-    /* Input Fields Native Streamlit */
-    .stSelectbox > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
-    .stDateInput > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
-    
-    /* Cards de Métricas */
-    .nexus-card {
-        background-color: #111111;
-        border: 1px solid #333333;
-        border-radius: 8px;
-        padding: 20px;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-        height: 100%;
-        display: flex; flex-direction: column; justify-content: center;
-    }
-    .nexus-card:hover { border-color: #0070f3; box-shadow: 0 0 15px rgba(0, 112, 243, 0.1); }
-    .card-label { color: #888888; font-size: 12px; text-transform: uppercase; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; }
-    .card-value { color: #ededed; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; }
-    .card-diff { color: #0070f3; font-size: 13px; font-weight: 500; }
-    
-    /* Layout de Gráficos e Tabelas */
-    .nexus-container {
-        background-color: #111111;
-        border: 1px solid #333333;
-        border-radius: 8px;
-        padding: 20px;
-        margin-top: 24px;
-    }
-    .section-title { font-size: 14px; color: #ededed; font-weight: 600; text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid #333333; padding-bottom: 8px; }
-    
-    /* Lista de Sub IDs */
-    .subid-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #222222; }
-    .subid-row:last-child { border-bottom: none; }
-    .subid-name { color: #a1a1aa; font-size: 14px; }
-    .subid-val { color: #ededed; font-size: 14px; font-weight: 600; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ── reset geral ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+.stApp {
+    background-color: #000000 !important;
+    color: #e5e5e5;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+#MainMenu, footer, header { visibility: hidden; }
+
+[data-testid="stSidebar"] {
+    background-color: #080808;
+    border-right: 1px solid #1a1a1a;
+}
+
+.block-container {
+    padding: 2rem 2.5rem 3rem 2.5rem;
+    max-width: 1280px;
+}
+
+/* ── cards de métrica ── */
+.m-card {
+    background: #111111;
+    border: 1px solid #222222;
+    border-radius: 14px;
+    padding: 28px 24px;
+    transition: border-color .25s ease, box-shadow .25s ease;
+}
+.m-card:hover {
+    border-color: #333333;
+    box-shadow: 0 0 0 1px #222222;
+}
+.m-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666666;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    margin-bottom: 10px;
+}
+.m-value {
+    font-size: 34px;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1.15;
+    letter-spacing: -.5px;
+}
+.m-sub {
+    font-size: 11.5px;
+    color: #4a4a4a;
+    margin-top: 10px;
+    line-height: 1.4;
+}
+.green  { color: #00d47b !important; }
+.yellow { color: #f5a623 !important; }
+.muted  { color: #333333 !important; }
+
+/* ── cabeçalho ── */
+.hdr    { font-size: 30px; font-weight: 800; color: #fff; letter-spacing: -.6px; }
+.hdr-sub{ font-size: 14px; color: #555; margin-bottom: 28px; }
+
+/* ── divisor ── */
+.sep { border: none; border-top: 1px solid #1a1a1a; margin: 28px 0; }
+
+/* ── botões / inputs ── */
+.stButton > button {
+    background: #111 !important;
+    color: #fff !important;
+    border: 1px solid #333 !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    transition: all .2s ease !important;
+}
+.stButton > button:hover {
+    background: #1a1a1a !important;
+    border-color: #555 !important;
+}
+div[data-baseweb="select"] > div,
+div[data-baseweb="input"] > div,
+.stDateInput > div > div > input,
+.stTextInput > div > div > input {
+    background-color: #111 !important;
+    color: #eee !important;
+    border-color: #333 !important;
+    border-radius: 8px !important;
+}
+
+/* ── dataframe ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid #222;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* ── scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #000; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+/* ── estado vazio ── */
+.empty-state {
+    text-align: center;
+    padding: 100px 20px;
+    color: #333;
+}
+.empty-state .icon { font-size: 52px; margin-bottom: 16px; }
+.empty-state .title { font-size: 18px; font-weight: 600; color: #555; margin-bottom: 6px; }
+.empty-state .desc  { font-size: 13px; color: #3a3a3a; }
 </style>
 """, unsafe_allow_html=True)
 
-hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE ---
-def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
-    if not url_api or url_api == "":
-        return {"error": "Aviso", "detalhe": "URL da API não configurada"}
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FUNÇÕES UTILITÁRIAS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def to_unix(d: date, end_of_day: bool = False) -> int:
+    """Converte uma date para Unix Timestamp no fuso BR (UTC-3)."""
+    h, m, s = (23, 59, 59) if end_of_day else (0, 0, 0)
+    return int(datetime(d.year, d.month, d.day, h, m, s, tzinfo=BR_TZ).timestamp())
+
+
+def brl(valor: float) -> str:
+    """Formata float para R$ no padrão brasileiro."""
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _safe_float(v) -> float:
+    """Converte qualquer valor para float com fallback 0."""
+    if v is None:
+        return 0.0
     try:
-        app_id = st.secrets.get("SHOPEE_APP_ID")
-        secret = st.secrets.get("SHOPEE_SECRET")
-        if not app_id or not secret:
-            return {"error": "Aviso", "detalhe": "Credenciais não configuradas nos Secrets!"}
-            
-        timestamp = int(time.time())
-        start_ts = int(time.mktime(data_ini.timetuple()))
-        end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
-        
-        graphql_query = f"""
-        {{
-          conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
-            nodes {{ purchaseTime conversionStatus netCommission estimatedTotalCommission }}
-          }}
-        }}
-        """
-        payload = {"query": graphql_query.strip()}
-        payload_str = json.dumps(payload, separators=(',', ':'))
-        
-        base_string = f"{app_id}{timestamp}{payload_str}{secret}"
-        signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"SHA256 Credential={app_id}, Timestamp={timestamp}, Signature={signature}"
-        }
-        
-        r = requests.post(url_api, data=payload_str, headers=headers, timeout=20)
-        try: return r.json()
-        except: return {"error": "Erro de Leitura", "status": r.status_code, "texto": r.text}
-    except Exception as e:
-        return {"error": "Falha no Python", "detalhe": str(e)}
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
 
-# --- 3. LEITURA DE CSV ---
-def ler_csv_shopee(file):
-    if file is None: return pd.DataFrame()
-    try: df = pd.read_csv(file, encoding='utf-8')
-    except:
-        file.seek(0)
-        df = pd.read_csv(file, sep=';', encoding='latin-1')
-    return df
 
-# --- 4. CONFIGURAÇÕES (SIDEBAR) ---
-with st.sidebar:
-    st.markdown("<h3 style='color: #ededed;'>⚙️ Configurações</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 13px; color: #888;'>Painel de controle</p>", unsafe_allow_html=True)
-    st.divider()
-    
-    modo = st.radio("Fonte de Dados", ["API Automática", "CSV Local"])
-    
-    st.divider()
-    arquivo_v = None
-    if modo == "CSV Local":
-        arquivo_v = st.file_uploader("📥 CSV Vendas", type=['csv'])
-    arquivo_c = st.file_uploader("🖱️ CSV Cliques", type=['csv'])
-        
-    api_endpoint = st.secrets.get("SHOPEE_GRAPHQL_ENDPOINT", "https://open-api.affiliate.shopee.com.br/graphql")
-    
-    st.divider()
-    modo_diagnostico = st.checkbox("🛠️ Ativar Modo Diagnóstico", help="Mostra os dados puros que a Shopee enviou.")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# API — AUTENTICAÇÃO + REQUEST
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# --- 5. CABEÇALHO PRINCIPAL E FILTROS ---
-col_title, col_filter1, col_filter2 = st.columns([2, 1, 1])
+def _build_query(start_ts: int, end_ts: int, limit: int = PAGE_SIZE,
+                 scroll_id: str = "") -> str:
+    """
+    Monta a query GraphQL COMPACTA.
+    Solicita APENAS os 4 campos permitidos:
+      purchaseTime · conversionStatus · netCommission · estimatedTotalCommission
+    NÃO inclui purchaseAmount nem customParameters.
+    """
+    return (
+        "{"
+        f'orderListV2(startTime:{start_ts},'
+        f'endTime:{end_ts},'
+        f'limit:{limit},'
+        f'scrollId:"{scroll_id}")'
+        "{nodes{"
+        "purchaseTime "
+        "conversionStatus "
+        "netCommission "
+        "estimatedTotalCommission"
+        "}"
+        "scrollId "
+        "more}"
+        "}"
+    )
 
-with col_title:
-    st.markdown("<h1>NEXUS <span style='color: #0070f3;'>ANALYTICS</span></h1>", unsafe_allow_html=True)
 
-with col_filter1:
-    opcao_data = st.selectbox("Período Rápido", ["Últimos 30 dias", "Ontem", "Anteontem", "Personalizado"])
+def _sign_and_call(app_id: str, secret: str, query: str) -> dict:
+    """
+    1) Monta o payload JSON sem espaços.
+    2) Gera timestamp UNIX (epoch seconds).
+    3) Signature = SHA256( AppID + Timestamp + PayloadJSON + Secret )
+    4) Header: SHA256 Credential={AppID}, Timestamp={ts}, Signature={sig}
+    5) POST → endpoint GraphQL.
+    """
+    payload_dict = {"query": query}
+    payload_json = json.dumps(payload_dict, separators=(",", ":"), ensure_ascii=False)
 
-with col_filter2:
-    if opcao_data == "Ontem":
-        start_d, end_d = hoje_pc - timedelta(days=1), hoje_pc - timedelta(days=1)
-        st.date_input("Data exata", value=[start_d, end_d], disabled=True)
-    elif opcao_data == "Anteontem":
-        start_d, end_d = hoje_pc - timedelta(days=2), hoje_pc - timedelta(days=2)
-        st.date_input("Data exata", value=[start_d, end_d], disabled=True)
-    elif opcao_data == "Últimos 30 dias":
-        start_d, end_d = hoje_pc - relativedelta(days=30), hoje_pc
-        st.date_input("Data exata", value=[start_d, end_d], disabled=True)
-    else: 
-        data_sel = st.date_input("Escolha o intervalo", value=[hoje_pc - timedelta(days=3), hoje_pc], max_value=hoje_pc)
-        if len(data_sel) == 2: start_d, end_d = data_sel[0], data_sel[1]
-        else: start_d, end_d = (hoje_pc, hoje_pc)
+    ts = str(int(time.time()))
+    raw = f"{app_id}{ts}{payload_json}{secret}"
+    sig = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-st.write("") 
+    headers = {
+        "Authorization": (
+            f"SHA256 Credential={app_id}, "
+            f"Timestamp={ts}, "
+            f"Signature={sig}"
+        ),
+        "Content-Type": "application/json",
+    }
 
-# --- 6. PROCESSAMENTO DE DADOS ---
-vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
-df_v_filtrado = pd.DataFrame()
-flat_nodes = [] 
+    resp = requests.post(
+        ENDPOINT,
+        headers=headers,
+        data=payload_json.encode("utf-8"),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
-if modo == "API Automática":
-    with st.spinner("Sincronizando banco de dados..."):
-        dados = buscar_vendas_shopee_api(start_d, end_d, api_endpoint)
-        if dados and 'data' in dados and 'conversionReport' in dados['data']:
-            nodes = dados['data']['conversionReport']['nodes']
-            if nodes:
-                for n in nodes:
-                    # CORREÇÃO MATEMÁTICA BRUTAL AQUI:
-                    # Converte forçadamente para float. Se a líquida for 0.00 (ex: pendente), ele pega a estimada.
-                    try:
-                        net_com = float(n.get('netCommission') or 0)
-                    except:
-                        net_com = 0.0
-                        
-                    try:
-                        est_com = float(n.get('estimatedTotalCommission') or 0)
-                    except:
-                        est_com = 0.0
-                        
-                    # Se net_com for maior que zero, usa ela (pedido concluído). Senão, usa a estimada.
-                    comissao_real = net_com if net_com > 0 else est_com
-                    
-                    flat_nodes.append({
-                        'purchaseTime': n.get('purchaseTime'),
-                        'conversionStatus': n.get('conversionStatus'),
-                        'commission': comissao_real,
-                        'subId1': "Oculto pela API",
-                        'order_price': 0.0 
-                    })
-                
-                df_cru = pd.DataFrame(flat_nodes)
-                
-                if modo_diagnostico:
-                    st.error(f"🚨 RAIO-X DA API ATIVADO: A Shopee enviou {len(df_cru)} itens neste período.")
-                    st.dataframe(df_cru, use_container_width=True)
-                
-                if 'conversionStatus' in df_cru.columns:
-                    status_limpo = df_cru['conversionStatus'].astype(str).str.lower()
-                    filtro_rejeitados = status_limpo.str.contains('cancel|reject|invalid|invalido', na=False)
-                    df_v_filtrado = df_cru[~filtro_rejeitados]
-                
-                vendas_b = df_v_filtrado['order_price'].sum()
-                pedidos_t = len(df_v_filtrado)
-                comissao_t = df_v_filtrado['commission'].sum()
-        else:
-            if modo_diagnostico:
-                st.error("🚨 A API retornou isso aqui:")
-                st.json(dados)
-            else:
-                st.warning("Sem dados retornados para o período.")
-else: 
-    if arquivo_v:
-        df_v = ler_csv_shopee(arquivo_v)
-        colunas_tempo = [c for c in df_v.columns if 'horário' in c.lower() or 'tempo' in c.lower() or 'data' in c.lower()]
-        if colunas_tempo:
-            col_tempo_exata = colunas_tempo[0]
-            df_v['Data_Simples'] = pd.to_datetime(df_v[col_tempo_exata]).dt.date
-            df_v_filtrado = df_v[(df_v['Data_Simples'] >= start_d) & (df_v['Data_Simples'] <= end_d)]
-            
-            if modo_diagnostico:
-                st.error(f"🚨 RAIO-X DO CSV: {len(df_v_filtrado)} linhas antes do filtro.")
-                st.dataframe(df_v_filtrado)
-            
-            colunas_status = [c for c in df_v_filtrado.columns if 'status' in c.lower()]
-            if colunas_status:
-                col_status_exata = colunas_status[0]
-                status_limpo_csv = df_v_filtrado[col_status_exata].astype(str).str.lower()
-                filtro_rejeitados_csv = status_limpo_csv.str.contains('cancel|reject|invalid|invalido', na=False)
-                df_v_filtrado = df_v_filtrado[~filtro_rejeitados_csv]
-            
-            col_preco = [c for c in df_v_filtrado.columns if 'preço' in c.lower() or 'price' in c.lower()]
-            col_comissao = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
-            
-            if col_preco and col_comissao:
-                vendas_b = pd.to_numeric(df_v_filtrado[col_preco[0]], errors='coerce').sum()
-                pedidos_t = len(df_v_filtrado)
-                comissao_t = pd.to_numeric(df_v_filtrado[col_comissao[0]], errors='coerce').sum()
 
-if arquivo_c:
-    df_c = ler_csv_shopee(arquivo_c)
-    colunas_data_c = [c for c in df_c.columns if 'Data' in c or 'Date' in c or 'Tempo' in c or 'Horário' in c]
-    if colunas_data_c:
-        df_c['Data_Simples'] = pd.to_datetime(df_c[colunas_data_c[0]]).dt.date
-        df_c_filtrado = df_c[(df_c['Data_Simples'] >= start_d) & (df_c['Data_Simples'] <= end_d)]
-        col_cliques = [c for c in df_c.columns if 'Clique' in c or 'Clicks' in c or 'Qtd' in c]
-        cliques_t = pd.to_numeric(df_c_filtrado[col_cliques[0]], errors='coerce').sum() if col_cliques else len(df_c_filtrado)
+def fetch_orders(app_id: str, secret: str,
+                 start_ts: int, end_ts: int) -> tuple[list, str | None]:
+    """
+    Busca TODOS os pedidos paginados.
+    Retorna (lista_de_nodes, mensagem_de_erro_ou_None).
+    """
+    all_nodes: list[dict] = []
+    scroll_id = ""
+    has_more = True
+    page = 0
 
-ticket = vendas_b / pedidos_t if pedidos_t > 0 else 0
-conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
+    while has_more and page < MAX_PAGES:
+        q = _build_query(start_ts, end_ts, scroll_id=scroll_id)
 
-# --- 7. TELA PRINCIPAL (MÉTRICAS) ---
-m1, m2, m3, m4 = st.columns(4)
+        try:
+            result = _sign_and_call(app_id, secret, q)
+        except requests.exceptions.HTTPError as exc:
+            body = exc.response.text[:500] if exc.response else ""
+            return all_nodes, f"HTTP {exc.response.status_code}: {body}"
+        except requests.exceptions.RequestException as exc:
+            return all_nodes, f"Erro de conexão: {exc}"
 
-with m1:
-    st.markdown(f"""
-    <div class="nexus-card">
-        <div class="card-label">Vendas Totais</div>
-        <div class="card-value">R$ {vendas_b:.2f}</div>
-        <div class="card-diff" style="color: #888;">{'(API Oculta Bruto)' if modo == 'API Automática' else 'Valor bruto filtrado'}</div>
-    </div>
-    """, unsafe_allow_html=True)
+        # Erros GraphQL
+        if "errors" in result:
+            msg = result["errors"][0].get("message", str(result["errors"]))
+            return all_nodes, f"GraphQL: {msg}"
 
-with m2:
-    st.markdown(f"""
-    <div class="nexus-card">
-        <div class="card-label">Pedidos Válidos</div>
-        <div class="card-value">{pedidos_t}</div>
-        <div class="card-diff">+0.0% vs anterior</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with m3:
-    st.markdown(f"""
-    <div class="nexus-card">
-        <div class="card-label">Comissão Líquida</div>
-        <div class="card-value">R$ {comissao_t:.2f}</div>
-        <div class="card-diff">+0.0% vs anterior</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with m4:
-    st.markdown(f"""
-    <div class="nexus-card">
-        <div class="card-label">Taxa de Conversão</div>
-        <div class="card-value">{conv:.2f}%</div>
-        <div class="card-diff" style="color: #a1a1aa;">{cliques_t} cliques</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- 8. GRÁFICO E TABELAS ---
-if not df_v_filtrado.empty:
-    
-    col_chart, col_data = st.columns([7, 3])
-    
-    with col_chart:
-        st.markdown("<div class='nexus-container'>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>Receita por Dia (Comissão)</div>", unsafe_allow_html=True)
-        
-        col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
-        col_comissao_grafico = 'commission' if 'commission' in df_v_filtrado.columns else df_v_filtrado.columns[-1] 
-        
-        if modo != "API Automática":
-            col_csv_match = [c for c in df_v_filtrado.columns if 'comissão' in c.lower() or 'commission' in c.lower()]
-            if col_csv_match: col_comissao_grafico = col_csv_match[0]
-            
-        if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
-            df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
-        else:
-            df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
-            
-        df_v_filtrado[col_comissao_grafico] = pd.to_numeric(df_v_filtrado[col_comissao_grafico], errors='coerce').fillna(0)
-            
-        evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao_grafico].sum().reset_index()
-        evolucao.columns = ['Data', 'Comissão']
-        
-        fig = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#0070f3'])
-        fig.update_traces(line=dict(width=2), fillcolor='rgba(0, 112, 243, 0.1)')
-        fig.update_layout(
-            yaxis_title="", xaxis_title="", height=300, 
-            margin=dict(l=0, r=0, t=10, b=0),
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-            yaxis=dict(showgrid=True, gridcolor='#222222', zeroline=False),
-            xaxis=dict(showgrid=False, zeroline=False)
+        # Parsing resiliente (tenta nomes alternativos)
+        data = result.get("data", {})
+        root = (
+            data.get("orderListV2")
+            or data.get("orderList")
+            or data.get("getOrderList")
+            or {}
         )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-    with col_data:
-        st.markdown("<div class='nexus-container' style='height: 100%;'>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>Top Performance</div>", unsafe_allow_html=True)
-        
-        st.markdown(f"""
-            <div class="subid-row">
-                <span class="subid-name">Total Consolidado</span>
-                <span class="subid-val">R$ {comissao_t:.2f}</span>
-            </div>
-            <div class="subid-row">
-                <span class="subid-name">Ticket Médio</span>
-                <span class="subid-val">R$ {ticket:.2f}</span>
-            </div>
-            <div class="subid-row">
-                <span class="subid-name">Pedidos Aprovados</span>
-                <span class="subid-val">{pedidos_t} un.</span>
-            </div>
-        """, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        nodes = root.get("nodes") or root.get("orders") or []
+        all_nodes.extend(nodes)
+
+        scroll_id = root.get("scrollId") or root.get("cursor") or ""
+        has_more = root.get("more", root.get("hasMore", root.get("hasNextPage", False)))
+        page += 1
+
+    return all_nodes, None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PROCESSAMENTO DE DADOS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _is_blacklisted(status: str) -> bool:
+    s = (status or "").lower()
+    return any(bl in s for bl in BLACKLIST)
+
+
+def _effective_commission(order: dict) -> tuple[float, str]:
+    """
+    Retorna (valor_comissão, tipo).
+    - netCommission > 0 → usa esse valor  (Concluído)
+    - caso contrário    → estimatedTotalCommission (Pendente)
+    """
+    net = _safe_float(order.get("netCommission"))
+    if net > 0:
+        return net, "Concluído"
+    est = _safe_float(order.get("estimatedTotalCommission"))
+    return est, "Pendente"
+
+
+def process(raw: list[dict]) -> tuple[list[dict], int]:
+    """
+    Aplica filtro de lista-negra e calcula comissão efetiva.
+    Retorna (pedidos_válidos, total_bruto).
+    """
+    total_raw = len(raw)
+    valid = []
+    for o in raw:
+        if _is_blacklisted(o.get("conversionStatus", "")):
+            continue
+        comm, ctype = _effective_commission(o)
+        valid.append({
+            "ts": o.get("purchaseTime", 0),
+            "status": o.get("conversionStatus", "—"),
+            "commission": comm,
+            "type": ctype,
+        })
+    return valid, total_raw
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# UI — CARD DE MÉTRICA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def card(label: str, value: str, sub: str = "", css: str = ""):
+    vc = f"m-value {css}" if css else "m-value"
+    sub_html = f'<div class="m-sub">{sub}</div>' if sub else ""
+    st.markdown(
+        f'<div class="m-card">'
+        f'<div class="m-label">{label}</div>'
+        f'<div class="{vc}">{value}</div>'
+        f'{sub_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SIDEBAR — CREDENCIAIS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Tenta carregar de st.secrets primeiro (Streamlit Cloud)
+try:
+    _def_id = st.secrets["SHOPEE_APP_ID"]
+    _def_sk = st.secrets["SHOPEE_SECRET"]
+except Exception:
+    _def_id, _def_sk = "", ""
+
+with st.sidebar:
+    st.markdown("### ⚙️ Credenciais")
+    st.caption("Insira App ID e Secret da Shopee Open Platform.")
+    app_id = st.text_input("App ID", value=_def_id, type="password")
+    secret = st.text_input("Secret Key", value=_def_sk, type="password")
+    st.markdown("<hr class='sep'>", unsafe_allow_html=True)
+    st.caption(
+        "ℹ️ Campos **purchaseAmount** e **customParameters** "
+        "NÃO são solicitados na query (restrição de acesso)."
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HEADER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+st.markdown('<div class="hdr">🛍️ Shopee Affiliates</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="hdr-sub">Dashboard de Comissões · API v2 GraphQL · Brasil</div>',
+    unsafe_allow_html=True,
+)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CALENDÁRIO + ATALHOS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+today = datetime.now(BR_TZ).date()
+yesterday = today - timedelta(days=1)
+day_before = today - timedelta(days=2)
+thirty_ago = today - timedelta(days=30)
+
+c_preset, c_start, c_end, c_btn = st.columns([2.2, 1.8, 1.8, 1])
+
+with c_preset:
+    preset = st.selectbox(
+        "Período rápido",
+        ["Ontem", "Anteontem", "Últimos 30 dias", "Personalizado"],
+        label_visibility="collapsed",
+    )
+
+if preset == "Ontem":
+    d_start, d_end = yesterday, yesterday
+elif preset == "Anteontem":
+    d_start, d_end = day_before, day_before
+elif preset == "Últimos 30 dias":
+    d_start, d_end = thirty_ago, yesterday
+else:
+    d_start, d_end = yesterday, today
+
+with c_start:
+    start_date = st.date_input(
+        "De", value=d_start, max_value=today, label_visibility="collapsed"
+    )
+with c_end:
+    end_date = st.date_input(
+        "Até", value=d_end, max_value=today, label_visibility="collapsed"
+    )
+with c_btn:
+    go = st.button("▶ Consultar", use_container_width=True, type="primary")
+
+st.markdown("<hr class='sep'>", unsafe_allow_html=True)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ESTADO INICIAL  (antes de clicar)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if not go:
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="icon">📊</div>'
+        '<div class="title">Selecione um período e clique em Consultar</div>'
+        '<div class="desc">Configure suas credenciais no menu lateral (☰)</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# VALIDAÇÕES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if not app_id or not secret:
+    st.error("⚠️ Preencha App ID e Secret Key na barra lateral.")
+    st.stop()
+
+if start_date > end_date:
+    st.error("⚠️ Data inicial maior que data final.")
+    st.stop()
+
+start_ts = to_unix(start_date, end_of_day=False)
+end_ts   = to_unix(end_date,   end_of_day=True)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CHAMADA À API
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with st.spinner("Consultando Shopee…"):
+    raw_orders, error = fetch_orders(app_id, secret, start_ts, end_ts)
+
+if error:
+    st.error(f"❌ {error}")
+    with st.expander("🔍 Informações de debug"):
+        st.code(f"Endpoint: {ENDPOINT}", language="text")
+        st.code(f"startTime (unix): {start_ts}", language="text")
+        st.code(f"endTime   (unix): {end_ts}", language="text")
+        st.code(
+            f"Query de exemplo:\n{_build_query(start_ts, end_ts)}",
+            language="graphql",
+        )
+    st.stop()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PROCESSAMENTO
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+valid_orders, total_raw = process(raw_orders)
+total_valid  = len(valid_orders)
+total_comm   = sum(o["commission"] for o in valid_orders)
+conv_rate    = (total_valid / total_raw * 100) if total_raw > 0 else 0.0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MÉTRICAS PRINCIPAIS  (4 cards)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+k1, k2, k3, k4 = st.columns(4, gap="medium")
+
+with k1:
+    card(
+        "Vendas Totais",
+        "—",
+        "Indisponível via API (purchaseAmount restrito)",
+        css="muted",
+    )
+
+with k2:
+    card(
+        "Pedidos Válidos",
+        f"{total_valid}",
+        f"de {total_raw} retornados · {total_raw - total_valid} removidos pelo filtro",
+    )
+
+with k3:
+    card(
+        "Comissão Líquida",
+        brl(total_comm),
+        "net + estimated (pedidos válidos)",
+        css="green",
+    )
+
+with k4:
+    card(
+        "Taxa de Conversão",
+        f"{conv_rate:.1f}%",
+        "Pedidos válidos ÷ total retornado",
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BREAKDOWN: CONCLUÍDO vs PENDENTE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if valid_orders:
+    st.markdown("<hr class='sep'>", unsafe_allow_html=True)
+
+    comm_done    = sum(o["commission"] for o in valid_orders if o["type"] == "Concluído")
+    comm_pending = sum(o["commission"] for o in valid_orders if o["type"] == "Pendente")
+    qty_done     = sum(1 for o in valid_orders if o["type"] == "Concluído")
+    qty_pending  = sum(1 for o in valid_orders if o["type"] == "Pendente")
+
+    b1, b2 = st.columns(2, gap="medium")
+    with b1:
+        card(
+            "✅ Comissão Concluída",
+            brl(comm_done),
+            f"{qty_done} pedido(s) · netCommission > 0",
+            css="green",
+        )
+    with b2:
+        card(
+            "⏳ Comissão Pendente",
+            brl(comm_pending),
+            f"{qty_pending} pedido(s) · via estimatedTotalCommission",
+            css="yellow",
+        )
+
+    # ── TABELA DE PEDIDOS ──
+    st.markdown("<hr class='sep'>", unsafe_allow_html=True)
+    st.markdown("#### 📋 Detalhamento")
+
+    def _fmt_ts(ts):
+        if ts and ts > 0:
+            try:
+                return datetime.fromtimestamp(int(ts), tz=BR_TZ).strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                return "—"
+        return "—"
+
+    df = pd.DataFrame(valid_orders)
+    df["Data / Hora"]   = df["ts"].apply(_fmt_ts)
+    df["Status"]        = df["status"]
+    df["Tipo"]          = df["type"]
+    df["Comissão (R$)"] = df["commission"].apply(lambda v: brl(v))
+
+    display = (
+        df[["Data / Hora", "Status", "Tipo", "Comissão (R$)"]]
+        .sort_values("Data / Hora", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+        height=min(520, 36 * len(display) + 40),
+    )
 
 else:
-    if modo == "API Automática":
-        st.warning(f"Sem pedidos válidos na API para o período selecionado.")
-    else:
-        st.info("Aguardando carregamento de dados do CSV...")
+    st.markdown("<hr class='sep'>", unsafe_allow_html=True)
+    st.info(
+        "Nenhum pedido válido no período "
+        f"**{start_date.strftime('%d/%m/%Y')}** — "
+        f"**{end_date.strftime('%d/%m/%Y')}**."
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RODAPÉ (debug rápido colapsado)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with st.expander("🔧 Debug / Parâmetros enviados"):
+    st.json({
+        "endpoint": ENDPOINT,
+        "startTime_unix": start_ts,
+        "endTime_unix": end_ts,
+        "startDate_br": start_date.strftime("%d/%m/%Y"),
+        "endDate_br": end_date.strftime("%d/%m/%Y"),
+        "total_raw": total_raw,
+        "total_valid": total_valid,
+        "blacklist_filter": list(BLACKLIST),
+        "query_example": _build_query(start_ts, end_ts),
+    })
