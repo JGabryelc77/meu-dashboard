@@ -27,7 +27,7 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (NOVO PADRÃO GRAPHQL OFICIAL BRASIL) ---
+# --- 2. FUNÇÃO API SHOPEE (COM A QUERY CORRIGIDA) ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
     if not url_api or url_api == "":
         return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
@@ -37,41 +37,40 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
         secret = st.secrets["SHOPEE_SECRET"]
         timestamp = int(time.time())
         
-        # Converte datas para Timestamp Unix (exigência do conversionReport)
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
-        # A query GraphQL extraída da documentação
+        # A query ajustada com os campos exatos que a Shopee pediu no erro
         graphql_query = f"""
         {{
           conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
             nodes {{
-              orderNo
               purchaseTime
-              orderStatus
-              purchaseAmount
-              estimatedCommission
-              subId1
+              conversionStatus
+              netCommission
+              estimatedTotalCommission
+              orders {{
+                purchaseAmount
+              }}
+              customParameters {{
+                subId1
+              }}
             }}
           }}
         }}
         """
         
-        # Monta o Payload e transforma em String JSON sem espaços
         payload = {"query": graphql_query.strip()}
         payload_str = json.dumps(payload, separators=(',', ':'))
         
-        # Calcula a Assinatura (Credential + Timestamp + Payload + Secret)
         base_string = f"{app_id}{timestamp}{payload_str}{secret}"
         signature = hashlib.sha256(base_string.encode('utf-8')).hexdigest()
         
-        # O cabeçalho exato exigido pela documentação que você me mandou
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"SHA256 Credential={app_id}, Timestamp={timestamp}, Signature={signature}"
         }
         
-        # Faz a requisição POST (O endpoint do GraphQL é sempre POST)
         r = requests.post(url_api, data=payload_str, headers=headers, timeout=10)
             
         try:
@@ -111,7 +110,6 @@ with st.sidebar:
     
     st.divider()
     with st.expander("⚙️ Configuração da API", expanded=True):
-        st.caption("Endpoint extraído da sua documentação:")
         api_url_input = st.text_input("URL do Endpoint", value="https://open-api.affiliate.shopee.com.br/graphql")
 
 # --- 5. PROCESSAMENTO DE DADOS ---
@@ -123,22 +121,40 @@ if modo == "API Automática":
     with st.spinner("Conectando aos servidores GraphQL da Shopee..."):
         dados = buscar_vendas_shopee_api(start_d, end_d, api_url_input)
         
-        # Novo caminho de leitura para o padrão GraphQL (conversionReport -> nodes)
         if dados and 'data' in dados and 'conversionReport' in dados['data']:
             nodes = dados['data']['conversionReport']['nodes']
             if nodes:
-                df_v_filtrado = pd.DataFrame(nodes)
-                # Filtra apenas pedidos não cancelados (ajuste fino caso a API retorne tudo)
-                if 'orderStatus' in df_v_filtrado.columns:
-                    df_v_filtrado = df_v_filtrado[df_v_filtrado['orderStatus'] != 'Cancelled']
+                # Planificando os dados aninhados do GraphQL
+                flat_nodes = []
+                for n in nodes:
+                    comissao = n.get('netCommission') or n.get('estimatedTotalCommission') or 0
+                    
+                    sub_id = "N/A"
+                    if n.get('customParameters') and isinstance(n['customParameters'], dict):
+                        sub_id = n['customParameters'].get('subId1', 'N/A')
+                        
+                    venda_bruta = 0
+                    if n.get('orders') and isinstance(n['orders'], list):
+                        for ord in n['orders']:
+                            venda_bruta += ord.get('purchaseAmount', 0)
+                            
+                    flat_nodes.append({
+                        'purchaseTime': n.get('purchaseTime'),
+                        'conversionStatus': n.get('conversionStatus'),
+                        'commission': float(comissao),
+                        'subId1': sub_id,
+                        'order_price': float(venda_bruta)
+                    })
+                    
+                df_v_filtrado = pd.DataFrame(flat_nodes)
                 
-                # Mapeamento dinâmico das colunas da API
-                col_preco = 'purchaseAmount' if 'purchaseAmount' in df_v_filtrado.columns else 'order_price'
-                col_comissao = 'estimatedCommission' if 'estimatedCommission' in df_v_filtrado.columns else 'commission'
+                # Ignorando status de cancelamento comuns
+                if 'conversionStatus' in df_v_filtrado.columns:
+                    df_v_filtrado = df_v_filtrado[~df_v_filtrado['conversionStatus'].isin(['Cancelled', 'Rejected', 'Invalid'])]
                 
-                vendas_b = df_v_filtrado[col_preco].sum()
+                vendas_b = df_v_filtrado['order_price'].sum()
                 pedidos_t = len(df_v_filtrado)
-                comissao_t = df_v_filtrado[col_comissao].sum()
+                comissao_t = df_v_filtrado['commission'].sum()
         else:
             st.error(f"⚠️ Resposta do Servidor:")
             st.json(dados) 
@@ -183,23 +199,25 @@ st.divider()
 if not df_v_filtrado.empty:
     c1, c2 = st.columns([2, 1])
     
-    # Identifica os nomes das colunas de forma dinâmica (API vs CSV)
     col_sub = 'subId1' if 'subId1' in df_v_filtrado.columns else ('Sub_id1' if 'Sub_id1' in df_v_filtrado.columns else df_v_filtrado.columns[0])
-    col_comissao = 'estimatedCommission' if 'estimatedCommission' in df_v_filtrado.columns else ('Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else 'commission')
+    col_comissao = 'commission' if 'commission' in df_v_filtrado.columns else ('Comissão líquida do afiliado(R$)' if 'Comissão líquida do afiliado(R$)' in df_v_filtrado.columns else df_v_filtrado.columns[0])
     col_canal = 'source' if 'source' in df_v_filtrado.columns else ('Canal' if 'Canal' in df_v_filtrado.columns else None)
     
     with c1:
         st.subheader("📊 Análise Unificada (SubID)")
-        tab = df_v_filtrado.groupby(col_sub).agg(
-            Pedidos=(col_sub, 'count'),
-            Comissao=(col_comissao, 'sum')
-        ).reset_index()
-        tab.columns = ['SubID', 'Pedidos', 'Comissão (R$)']
-        st.dataframe(tab.style.format({'Comissão (R$)': 'R$ {:.2f}'}), use_container_width=True)
+        if col_sub in df_v_filtrado.columns and col_comissao in df_v_filtrado.columns:
+            tab = df_v_filtrado.groupby(col_sub).agg(
+                Pedidos=(col_sub, 'count'),
+                Comissao=(col_comissao, 'sum')
+            ).reset_index()
+            tab.columns = ['SubID', 'Pedidos', 'Comissão (R$)']
+            st.dataframe(tab.style.format({'Comissão (R$)': 'R$ {:.2f}'}), use_container_width=True)
+        else:
+            st.caption("Dados insuficientes para tabela de SubID.")
         
     with c2:
         st.subheader("🎯 Vendas por Canal")
-        if col_canal:
+        if col_canal and col_canal in df_v_filtrado.columns:
             fig = px.pie(df_v_filtrado, names=col_canal, values=col_comissao, hole=0.6, template="plotly_dark", color_discrete_sequence=['#ff4b4b', '#ff6d00', '#00c853'])
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300)
             st.plotly_chart(fig, use_container_width=True)
@@ -207,19 +225,20 @@ if not df_v_filtrado.empty:
             st.caption("A API não retornou dados de canal para este período.")
 
     st.subheader("📈 Evolução da Comissão (Montanha)")
-    col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
+    col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else ('Data_Simples' if 'Data_Simples' in df_v_filtrado.columns else None)
     
-    if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
-        df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
-    else:
-        df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
+    if col_data_evolucao and col_data_evolucao in df_v_filtrado.columns:
+        if pd.api.types.is_numeric_dtype(df_v_filtrado[col_data_evolucao]):
+            df_v_filtrado['Data_Real'] = pd.to_datetime(df_v_filtrado[col_data_evolucao], unit='s').dt.date
+        else:
+            df_v_filtrado['Data_Real'] = df_v_filtrado[col_data_evolucao]
+            
+        evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
+        evolucao.columns = ['Data', 'Comissão']
         
-    evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
-    evolucao.columns = ['Data', 'Comissão']
-    
-    fig_a = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#00c853'], markers=True)
-    fig_a.update_traces(line_shape='spline')
-    fig_a.update_layout(yaxis_title="Comissão (R$)", xaxis_title="Dia", height=400)
-    st.plotly_chart(fig_a, use_container_width=True)
+        fig_a = px.area(evolucao, x='Data', y='Comissão', template="plotly_dark", color_discrete_sequence=['#00c853'], markers=True)
+        fig_a.update_traces(line_shape='spline')
+        fig_a.update_layout(yaxis_title="Comissão (R$)", xaxis_title="Dia", height=400)
+        st.plotly_chart(fig_a, use_container_width=True)
 else:
     st.info("Aguardando os dados da API ou do arquivo CSV.")
