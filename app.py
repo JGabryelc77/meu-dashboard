@@ -40,7 +40,6 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
-        # Query simplificada para garantir o status 200 OK
         graphql_query = f"""
         {{
           conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
@@ -100,16 +99,29 @@ with st.sidebar:
     arquivo_c = st.file_uploader("🖱️ Subir CSV de Cliques (P/ Conversão)", type=['csv'])
         
     st.divider()
-    data_sel = st.date_input("📅 Filtro de Período", value=[hoje_pc - timedelta(days=7), hoje_pc], max_value=hoje_pc)
+    
+    opcao_data = st.selectbox(
+        "📅 Filtro de Período",
+        ["Últimos 30 dias", "Ontem", "Anteontem", "Trechos de dias"]
+    )
+    
+    if opcao_data == "Ontem":
+        start_d, end_d = hoje_pc - timedelta(days=1), hoje_pc - timedelta(days=1)
+    elif opcao_data == "Anteontem":
+        start_d, end_d = hoje_pc - timedelta(days=2), hoje_pc - timedelta(days=2)
+    elif opcao_data == "Últimos 30 dias":
+        start_d, end_d = hoje_pc - timedelta(days=30), hoje_pc
+    else:
+        data_sel = st.date_input("Escolha as datas", value=[hoje_pc - timedelta(days=7), hoje_pc], max_value=hoje_pc)
+        start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
     
     st.divider()
-    with st.expander("⚙️ Configuração da API", expanded=True):
+    with st.expander("⚙️ Configuração da API", expanded=False):
         api_url_input = st.text_input("URL do Endpoint", value="https://open-api.affiliate.shopee.com.br/graphql")
 
 # --- 5. PROCESSAMENTO DE DADOS ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
-start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
 
 if modo == "API Automática":
     with st.spinner("Conectando aos servidores GraphQL da Shopee..."):
