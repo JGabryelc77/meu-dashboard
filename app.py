@@ -27,8 +27,11 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (DINÂMICA) ---
+# --- 2. FUNÇÃO API SHOPEE (DINÂMICA E BLINDADA) ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
+    if not url_api or url_api == "":
+        return {"error": "Aviso do Sistema", "detalhe": "Você esqueceu de colar a URL da API na barra lateral!"}
+        
     try:
         app_id = st.secrets["SHOPEE_APP_ID"]
         secret = st.secrets["SHOPEE_SECRET"]
@@ -51,17 +54,15 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api, metodo_api):
             "AppID": app_id
         }
         
-        # Executa POST ou GET dependendo da configuração do painel
         if metodo_api == "POST":
             r = requests.post(url_api, json=payload, headers=headers, timeout=10)
         else:
-            # Algumas APIs da Shopee exigem GET com os dados na URL
             r = requests.get(url_api, params=payload, headers=headers, timeout=10)
             
         try:
             return r.json()
         except:
-            return {"error": "A Shopee não retornou dados estruturados.", "status": r.status_code, "texto": r.text}
+            return {"error": "Erro de Leitura", "status": r.status_code, "texto": r.text}
             
     except Exception as e:
         return {"error": "Falha no Python", "detalhe": str(e)}
@@ -76,7 +77,7 @@ def ler_csv_shopee(file):
         df = pd.read_csv(file, sep=';', encoding='latin-1')
     return df
 
-# --- 4. SIDEBAR (MENU COM CONFIG AVANÇADA) ---
+# --- 4. SIDEBAR E CONFIGURAÇÃO ---
 with st.sidebar:
     st.markdown("<h1 style='color: #ff4b4b;'>🟠 AfiliadoDash</h1>", unsafe_allow_html=True)
     st.divider()
@@ -94,10 +95,10 @@ with st.sidebar:
     data_sel = st.date_input("📅 Filtro de Período", value=[hoje_pc - timedelta(days=7), hoje_pc], max_value=hoje_pc)
     
     st.divider()
-    # MODO DETETIVE / DEV: Você mesmo troca a URL se a Shopee atualizar!
-    with st.expander("⚙️ Configuração Avançada da API"):
-        st.caption("Verifique a URL correta no seu painel da Shopee.")
-        api_url_input = st.text_input("URL do Endpoint", value="https://openapi.shopee.com/v2/affiliate/get_order_list")
+    with st.expander("⚙️ Configuração da API (Cole a URL aqui)", expanded=True):
+        st.caption("Olhe no painel da Shopee qual é a URL do Endpoint de vendas.")
+        # Deixei a URL em branco para você colar a certa que está no seu painel!
+        api_url_input = st.text_input("URL do Endpoint", value="")
         api_method_input = st.selectbox("Método HTTP", ["POST", "GET"])
 
 # --- 5. PROCESSAMENTO DE DADOS ---
@@ -106,8 +107,7 @@ df_v_filtrado = pd.DataFrame()
 start_d, end_d = (data_sel[0], data_sel[1]) if len(data_sel) == 2 else (hoje_pc, hoje_pc)
 
 if modo == "API Automática":
-    with st.spinner("Sincronizando com a Shopee..."):
-        # Chama a API usando a URL e o Método escolhidos na barra lateral
+    with st.spinner("Conectando aos servidores da Shopee..."):
         dados = buscar_vendas_shopee_api(start_d, end_d, api_url_input, api_method_input)
         
         if dados and 'data' in dados and 'order_list' in dados['data']:
@@ -117,7 +117,7 @@ if modo == "API Automática":
                 pedidos_t = len(df_v_filtrado)
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
-            st.error(f"⚠️ Erro retornado pela URL ({api_method_input}):")
+            st.error(f"⚠️ Resposta do Servidor ({api_method_input}):")
             st.json(dados) 
             
 else: 
