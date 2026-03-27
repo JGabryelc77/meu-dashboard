@@ -11,27 +11,51 @@ from dateutil.relativedelta import relativedelta
 # --- 1. SETUP DA PÁGINA ---
 st.set_page_config(page_title="Nexus Analytics | Shopee", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS MINIMALISTA HIGH-TECH ---
+# --- CSS COMPLETAMENTE NOVO (ESTILO VERCEL / MINIMALISTA HIGH-TECH) ---
 st.markdown("""
 <style>
+    /* Reset e Fundos */
     .stApp, .main { background-color: #000000 !important; }
     h1, h2, h3, h4 { color: #ededed !important; font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: -0.05em; }
+    
+    /* Esconder elementos nativos */
     header, #MainMenu { visibility: hidden; }
+    
+    /* Sidebar */
     [data-testid="stSidebar"] { background-color: #0a0a0a !important; border-right: 1px solid #333333; }
     [data-testid="stSidebar"] * { color: #a1a1aa !important; }
     hr { border-color: #333333 !important; }
+    
+    /* Input Fields Native Streamlit */
     .stSelectbox > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
     .stDateInput > div > div { background-color: #111111; color: #ededed; border: 1px solid #333333; }
+    
+    /* Cards de Métricas */
     .nexus-card {
-        background-color: #111111; border: 1px solid #333333; border-radius: 8px; padding: 20px;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease; height: 100%; display: flex; flex-direction: column; justify-content: center;
+        background-color: #111111;
+        border: 1px solid #333333;
+        border-radius: 8px;
+        padding: 20px;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        height: 100%;
+        display: flex; flex-direction: column; justify-content: center;
     }
     .nexus-card:hover { border-color: #0070f3; box-shadow: 0 0 15px rgba(0, 112, 243, 0.1); }
     .card-label { color: #888888; font-size: 12px; text-transform: uppercase; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; }
     .card-value { color: #ededed; font-size: 32px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; }
     .card-diff { color: #0070f3; font-size: 13px; font-weight: 500; }
-    .nexus-container { background-color: #111111; border: 1px solid #333333; border-radius: 8px; padding: 20px; margin-top: 24px; }
+    
+    /* Layout de Gráficos e Tabelas */
+    .nexus-container {
+        background-color: #111111;
+        border: 1px solid #333333;
+        border-radius: 8px;
+        padding: 20px;
+        margin-top: 24px;
+    }
     .section-title { font-size: 14px; color: #ededed; font-weight: 600; text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid #333333; padding-bottom: 8px; }
+    
+    /* Lista de Sub IDs */
     .subid-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #222222; }
     .subid-row:last-child { border-bottom: none; }
     .subid-name { color: #a1a1aa; font-size: 14px; }
@@ -52,7 +76,6 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
             return {"error": "Aviso", "detalhe": "Credenciais não configuradas nos Secrets!"}
             
         timestamp = int(time.time())
-        # Ajuste de timezone forçado (pegando o range do dia inteiro)
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
@@ -106,7 +129,6 @@ with st.sidebar:
     api_endpoint = st.secrets.get("SHOPEE_GRAPHQL_ENDPOINT", "https://open-api.affiliate.shopee.com.br/graphql")
     
     st.divider()
-    # MODO DETETIVE:
     modo_diagnostico = st.checkbox("🛠️ Ativar Modo Diagnóstico", help="Mostra os dados puros que a Shopee enviou.")
 
 # --- 5. CABEÇALHO PRINCIPAL E FILTROS ---
@@ -138,7 +160,7 @@ st.write("")
 # --- 6. PROCESSAMENTO DE DADOS ---
 vendas_b, pedidos_t, comissao_t, cliques_t = 0.0, 0, 0.0, 0
 df_v_filtrado = pd.DataFrame()
-flat_nodes = [] # Lista crua para diagnóstico
+flat_nodes = [] 
 
 if modo == "API Automática":
     with st.spinner("Sincronizando banco de dados..."):
@@ -147,23 +169,35 @@ if modo == "API Automática":
             nodes = dados['data']['conversionReport']['nodes']
             if nodes:
                 for n in nodes:
-                    comissao = n.get('netCommission') or n.get('estimatedTotalCommission') or 0
+                    # CORREÇÃO MATEMÁTICA BRUTAL AQUI:
+                    # Converte forçadamente para float. Se a líquida for 0.00 (ex: pendente), ele pega a estimada.
+                    try:
+                        net_com = float(n.get('netCommission') or 0)
+                    except:
+                        net_com = 0.0
+                        
+                    try:
+                        est_com = float(n.get('estimatedTotalCommission') or 0)
+                    except:
+                        est_com = 0.0
+                        
+                    # Se net_com for maior que zero, usa ela (pedido concluído). Senão, usa a estimada.
+                    comissao_real = net_com if net_com > 0 else est_com
+                    
                     flat_nodes.append({
                         'purchaseTime': n.get('purchaseTime'),
                         'conversionStatus': n.get('conversionStatus'),
-                        'commission': float(comissao),
+                        'commission': comissao_real,
                         'subId1': "Oculto pela API",
                         'order_price': 0.0 
                     })
                 
                 df_cru = pd.DataFrame(flat_nodes)
                 
-                # Exibe a tabela CRUA se o diagnóstico estiver ativo
                 if modo_diagnostico:
                     st.error(f"🚨 RAIO-X DA API ATIVADO: A Shopee enviou {len(df_cru)} itens neste período.")
                     st.dataframe(df_cru, use_container_width=True)
                 
-                # Filtro de Rejeitados
                 if 'conversionStatus' in df_cru.columns:
                     status_limpo = df_cru['conversionStatus'].astype(str).str.lower()
                     filtro_rejeitados = status_limpo.str.contains('cancel|reject|invalid|invalido', na=False)
@@ -174,7 +208,7 @@ if modo == "API Automática":
                 comissao_t = df_v_filtrado['commission'].sum()
         else:
             if modo_diagnostico:
-                st.error("🚨 A API retornou isso aqui e não achou a tag 'conversionReport':")
+                st.error("🚨 A API retornou isso aqui:")
                 st.json(dados)
             else:
                 st.warning("Sem dados retornados para o período.")
@@ -314,3 +348,9 @@ if not df_v_filtrado.empty:
             </div>
         """, unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+else:
+    if modo == "API Automática":
+        st.warning(f"Sem pedidos válidos na API para o período selecionado.")
+    else:
+        st.info("Aguardando carregamento de dados do CSV...")
