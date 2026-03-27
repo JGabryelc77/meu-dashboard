@@ -27,7 +27,7 @@ st.markdown("""
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (COM A QUERY CORRIGIDA) ---
+# --- 2. FUNÇÃO API SHOPEE (QUERY MINIMALISTA E BLINDADA) ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
     if not url_api or url_api == "":
         return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
@@ -40,7 +40,7 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
-        # A query ajustada com os campos exatos que a Shopee pediu no erro
+        # Query simplificada para garantir o status 200 OK
         graphql_query = f"""
         {{
           conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
@@ -49,12 +49,6 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
               conversionStatus
               netCommission
               estimatedTotalCommission
-              orders {{
-                purchaseAmount
-              }}
-              customParameters {{
-                subId1
-              }}
             }}
           }}
         }}
@@ -124,31 +118,19 @@ if modo == "API Automática":
         if dados and 'data' in dados and 'conversionReport' in dados['data']:
             nodes = dados['data']['conversionReport']['nodes']
             if nodes:
-                # Planificando os dados aninhados do GraphQL
                 flat_nodes = []
                 for n in nodes:
                     comissao = n.get('netCommission') or n.get('estimatedTotalCommission') or 0
-                    
-                    sub_id = "N/A"
-                    if n.get('customParameters') and isinstance(n['customParameters'], dict):
-                        sub_id = n['customParameters'].get('subId1', 'N/A')
-                        
-                    venda_bruta = 0
-                    if n.get('orders') and isinstance(n['orders'], list):
-                        for ord in n['orders']:
-                            venda_bruta += ord.get('purchaseAmount', 0)
-                            
                     flat_nodes.append({
                         'purchaseTime': n.get('purchaseTime'),
                         'conversionStatus': n.get('conversionStatus'),
                         'commission': float(comissao),
-                        'subId1': sub_id,
-                        'order_price': float(venda_bruta)
+                        'subId1': "API_Oculto", 
+                        'order_price': 0.0 
                     })
                     
                 df_v_filtrado = pd.DataFrame(flat_nodes)
                 
-                # Ignorando status de cancelamento comuns
                 if 'conversionStatus' in df_v_filtrado.columns:
                     df_v_filtrado = df_v_filtrado[~df_v_filtrado['conversionStatus'].isin(['Cancelled', 'Rejected', 'Invalid'])]
                 
