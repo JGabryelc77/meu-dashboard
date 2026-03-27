@@ -143,17 +143,6 @@ with st.sidebar:
     st.markdown("<h2 style='color: #ef4444; text-align: center; margin-bottom: 0;'>🟠 AfiliadoDash</h2>", unsafe_allow_html=True)
     st.divider()
     
-    st.markdown("🔸 **Dashboard**")
-    st.markdown("📅 Análise do Dia")
-    st.markdown("🖱️ Análise de Cliques")
-    st.markdown("📢 Meta Ads")
-    st.markdown("🔗 Gerador de links")
-    st.markdown("📊 Análise de Links")
-    st.markdown("📤 Upload")
-    st.markdown("⚙️ Integrações")
-    
-    st.divider()
-    
     opcao_data = st.selectbox(
         "📅 Filtro de Período",
         ["Últimos 30 dias", "Ontem", "Anteontem", "Trechos de dias"]
