@@ -8,57 +8,60 @@ import json
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 
-# --- 1. SETUP DE DESIGN PREMIUM CLEAR ---
+# --- 1. SETUP DE DESIGN PREMIUM DARK ---
 st.set_page_config(page_title="AfiliadoDash PRO | API GraphQL", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS CUSTOMIZADO PARA LAYOUT PREMIUM ---
+# --- CSS CUSTOMIZADO PARA LAYOUT 100% DARK ---
 st.markdown("""
 <style>
     /* Estilos Gerais */
-    .main { background-color: #f0f2f5; }
-    h1, h2, h3 { color: #1e1e1e !important; font-family: 'Inter', sans-serif; font-weight: 700; }
-    .stCaption { color: #6c757d !important; }
-    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e5e5e5; }
-    [data-testid="stSidebar"] .stMarkdown { color: #333 !important; font-weight: 500; }
+    .main { background-color: #0d1117; }
+    h1, h2, h3 { color: #ffffff !important; font-family: 'Inter', sans-serif; font-weight: 700; }
+    .stCaption { color: #8b949e !important; }
+    [data-testid="stSidebar"] { background-color: #010409; border-right: 1px solid #30363d; }
+    [data-testid="stSidebar"] .stMarkdown { color: #c9d1d9 !important; font-weight: 500; }
+    
+    /* Inputs e Selectboxes */
+    div[data-baseweb="select"] > div { background-color: #161b22; color: white; border: 1px solid #30363d; }
     
     /* Cards de Métricas */
     .metric-card {
-        background-color: #ffffff; border: none;
+        background-color: #161b22; border: 1px solid #30363d;
         padding: 24px; border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         margin-bottom: 24px;
         display: flex; flex-direction: column; justify-content: space-between;
         border-top: 3px solid transparent;
     }
     .metric-card:hover { border-top: 3px solid #ff4b4b; transition: 0.2s; }
-    .metric-title { color: #6c757d; font-size: 13px; margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
-    .metric-value { color: #1e1e1e; font-size: 28px; font-weight: 800; margin-bottom: 8px; }
-    .metric-sub { color: #28a745; font-size: 12px; font-weight: 600; background: #e6f4ea; padding: 4px 8px; border-radius: 4px; display: inline-block; width: fit-content; margin-bottom: 4px;} 
-    .metric-sub-text { color: #6c757d; font-size: 12px;}
+    .metric-title { color: #8b949e; font-size: 13px; margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
+    .metric-value { color: #ffffff; font-size: 28px; font-weight: 800; margin-bottom: 8px; }
+    .metric-sub { color: #3fb950; font-size: 12px; font-weight: 600; background: rgba(46, 160, 67, 0.15); padding: 4px 8px; border-radius: 4px; display: inline-block; width: fit-content; margin-bottom: 4px;} 
+    .metric-sub-text { color: #8b949e; font-size: 12px;}
     
     /* Cartões de TOP SubID */
     .top-subid-card {
-        background-color: #ffffff; border: none;
+        background-color: #161b22; border: 1px solid #30363d;
         padding: 24px; border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         margin-bottom: 12px;
     }
     .top-subid-item {
         display: flex; align-items: center; justify-content: space-between;
         margin-bottom: 12px;
     }
-    .top-subid-label { font-size: 14px; color: #6c757d; font-weight: 500;}
-    .top-subid-value { font-size: 14px; color: #1e1e1e; font-weight: 700; }
+    .top-subid-label { font-size: 14px; color: #8b949e; font-weight: 500;}
+    .top-subid-value { font-size: 14px; color: #ffffff; font-weight: 700; }
     .top-subid-bar {
         height: 8px; border-radius: 4px;
-        background-color: #28a745; 
+        background-color: #3fb950; 
     }
 </style>
 """, unsafe_allow_html=True)
 
 hoje_pc = date.today()
 
-# --- 2. FUNÇÃO API SHOPEE (QUERY REVERTIDA PARA A VERSÃO BLINDADA) ---
+# --- 2. FUNÇÃO API SHOPEE ---
 def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
     if not url_api or url_api == "":
         return {"error": "Aviso do Sistema", "detalhe": "URL da API não configurada na barra lateral!"}
@@ -74,7 +77,7 @@ def buscar_vendas_shopee_api(data_ini, data_fim, url_api):
         start_ts = int(time.mktime(data_ini.timetuple()))
         end_ts = int(time.mktime((data_fim + timedelta(days=1)).timetuple())) - 1
         
-        # Query blindada exigida pela Shopee (Sem purchaseAmount e customParameters)
+        # Query blindada
         graphql_query = f"""
         {{
           conversionReport(purchaseTimeStart: {start_ts}, purchaseTimeEnd: {end_ts}) {{
@@ -228,7 +231,7 @@ conv = (pedidos_t / cliques_t * 100) if cliques_t > 0 else 0
 # --- 6. TELA PRINCIPAL ---
 st.markdown("<h1>Dashboard <span style='font-size: 14px; background-color: #ff4b4b; color: white; padding: 4px 12px; border-radius: 20px; vertical-align: middle; margin-left: 10px;'>Primeiros Passos ▶</span></h1>", unsafe_allow_html=True)
 
-# --- LINHA 1: CARDS (HTML/CSS) ---
+# --- LINHA 1: CARDS ---
 m1, m2, m3, m4, m5 = st.columns(5)
 
 with m1:
@@ -285,15 +288,15 @@ with m5:
         <div class="metric-title">Comissão a validar</div>
         <div class="metric-value">R$ {comissao_t:.2f}</div>
         <div>
-            <span class="metric-sub-text" style="color: #28a745; font-weight: bold;">Validadas a receber: R$ 0.00</span>
+            <span class="metric-sub-text" style="color: #3fb950; font-weight: bold;">Validadas a receber: R$ 0.00</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 # --- LINHA 2: GRÁFICOS E TABELAS ---
 if not df_v_filtrado.empty:
-    st.markdown("<div style='background: white; padding: 20px; border-radius: 12px; margin-top: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);'>", unsafe_allow_html=True)
-    st.markdown("<h3 style='font-size: 14px; color: #1e1e1e; text-transform: uppercase;'>Evolução da Comissão</h3>", unsafe_allow_html=True)
+    st.markdown("<div style='background: #161b22; padding: 20px; border-radius: 12px; margin-top: 20px; border: 1px solid #30363d; box-shadow: 0 4px 6px rgba(0,0,0,0.3);'>", unsafe_allow_html=True)
+    st.markdown("<h3 style='font-size: 14px; color: #ffffff; text-transform: uppercase;'>Evolução da Comissão</h3>", unsafe_allow_html=True)
     
     col_data_evolucao = 'purchaseTime' if 'purchaseTime' in df_v_filtrado.columns else 'Data_Simples'
     col_comissao = 'commission' if 'commission' in df_v_filtrado.columns else 'Comissão líquida do afiliado(R$)'
@@ -306,13 +309,15 @@ if not df_v_filtrado.empty:
     evolucao = df_v_filtrado.groupby('Data_Real')[col_comissao].sum().reset_index()
     evolucao.columns = ['Data', 'Comissão']
     
-    # Gráfico de linhas pontilhadas como na sua imagem
-    fig_a = px.line(evolucao, x='Data', y='Comissão', template="plotly_white", markers=True, color_discrete_sequence=['#28a745'])
+    # Gráfico de linhas pontilhadas (agora no tema Dark)
+    fig_a = px.line(evolucao, x='Data', y='Comissão', template="plotly_dark", markers=True, color_discrete_sequence=['#3fb950'])
     fig_a.update_traces(marker=dict(size=10))
     fig_a.update_layout(
         yaxis_title="", xaxis_title="", height=350, 
         margin=dict(l=0, r=0, t=20, b=0),
-        yaxis=dict(showgrid=True, griddash='dash', gridcolor='#e5e5e5'),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        yaxis=dict(showgrid=True, griddash='dash', gridcolor='#30363d'),
         xaxis=dict(showgrid=False)
     )
     st.plotly_chart(fig_a, use_container_width=True)
@@ -325,7 +330,7 @@ if not df_v_filtrado.empty:
     with c1:
         st.markdown(f"""
         <div class="top-subid-card">
-            <div style="font-size: 12px; font-weight: bold; color: #1e1e1e; margin-bottom: 20px;">TOP SUBID 1 (COMISSÃO)</div>
+            <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin-bottom: 20px;">TOP SUBID 1 (COMISSÃO)</div>
             <div class="top-subid-item">
                 <div class="top-subid-label">Sem Sub ID</div>
                 <div class="top-subid-value">R$ {comissao_t:.2f}</div>
@@ -337,7 +342,7 @@ if not df_v_filtrado.empty:
     with c2:
         st.markdown(f"""
         <div class="top-subid-card">
-            <div style="font-size: 12px; font-weight: bold; color: #1e1e1e; margin-bottom: 20px;">TOP SUBID 2 (COMISSÃO)</div>
+            <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin-bottom: 20px;">TOP SUBID 2 (COMISSÃO)</div>
             <div class="top-subid-item">
                 <div class="top-subid-label">-</div>
                 <div class="top-subid-value">R$ 0.00</div>
@@ -349,7 +354,7 @@ if not df_v_filtrado.empty:
     with c3:
         st.markdown(f"""
         <div class="top-subid-card">
-            <div style="font-size: 12px; font-weight: bold; color: #1e1e1e; margin-bottom: 20px;">TOP SUBID 3 (COMISSÃO)</div>
+            <div style="font-size: 12px; font-weight: bold; color: #ffffff; margin-bottom: 20px;">TOP SUBID 3 (COMISSÃO)</div>
             <div class="top-subid-item">
                 <div class="top-subid-label">-</div>
                 <div class="top-subid-value">R$ 0.00</div>
